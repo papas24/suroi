@@ -404,6 +404,23 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             hasLoot: true
         },
         {
+            idString: "dead_tree_big",
+            name: "Big Dead Tree",
+            material: "tree",
+            health: 720,
+            scale: {
+                spawnMin: 0.9,
+                spawnMax: 1.1,
+                destroy: 0.75
+            },
+            hitbox: new CircleHitbox(10),
+            spawnHitbox: new CircleHitbox(15),
+            rotationMode: RotationMode.Full,
+            zIndex: ZIndexes.ObstaclesLayer4,
+            allowFlyover: FlyoverPref.Never,
+            hasLoot: true
+        },
+        {
             idString: "rock",
             name: "Rock",
             material: "stone",
