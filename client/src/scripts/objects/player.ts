@@ -21,7 +21,7 @@ import { FloorTypes } from "../../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../../common/src/utils/vector";
 import { type Game } from "../game";
 import { type GameSound } from "../managers/soundManager";
-import { COLORS, GHILLIE_TINT, HITBOX_COLORS, HITBOX_DEBUG_MODE, PIXI_SCALE } from "../utils/constants";
+import { COLORS, GHILLIE_TINT, HITBOX_COLORS, HITBOX_DEBUG_MODE, MODE, PIXI_SCALE } from "../utils/constants";
 import { SuroiSprite, drawHitbox, toPixiCoords } from "../utils/pixi";
 import { type Tween } from "../utils/tween";
 import { GameObject } from "./gameObject";
@@ -516,6 +516,18 @@ export class Player extends GameObject<ObjectCategory.Player> {
 
             const skinID = full.skin.idString;
             if (this.isActivePlayer) {
+
+                 // -------------------------------------------------------------------------------------------
+                // Halloween Disguises: Play additional obstacle destroy sound.
+                // -------------------------------------------------------------------------------------------
+                if (this.dead && Loots.fromString<SkinDefinition>(skinID).isDisguise) {
+                    this.playSound(`${Loots.fromString<SkinDefinition>(skinID).material}_destroyed`, {
+                        falloff: 0.2,
+                        maxRange: 96
+                    });
+                }
+                 // -------------------------------------------------------------------------------------------
+
                 this.game.uiManager.skinID = skinID;
                 this.game.uiManager.updateWeapons();
             }
@@ -525,20 +537,39 @@ export class Player extends GameObject<ObjectCategory.Player> {
             const { body, leftFist, rightFist, leftLeg, rightLeg } = this.images;
 
             body
-                .setFrame(`${skinID}_base`)
+                .setFrame(skinDef.isDisguise ? skinID : `${skinID}_base`)
                 .setTint(tint);
+            
             leftFist
-                .setFrame(`${skinID}_fist`)
+                .setFrame(skinDef.isDisguise ? "disguise_fist" : `${skinID}_fist`)
                 .setTint(tint);
             rightFist
-                .setFrame(`${skinID}_fist`)
+                .setFrame(skinDef.isDisguise ? "disguise_fist" : `${skinID}_fist`)
                 .setTint(tint);
             leftLeg
-                ?.setFrame(`${skinID}_fist`)
+                ?.setFrame(skinDef.isDisguise ? "disguise_fist" :  `${skinID}_fist`)
                 .setTint(tint);
             rightLeg
-                ?.setFrame(`${skinID}_fist`)
+                ?.setFrame(skinDef.isDisguise ? "disguise_fist" :  `${skinID}_fist`)
                 .setTint(tint);
+
+            // ---------------------------------
+            // Halloween Disguises: Do not
+            // show fists/legs if disguised
+            // ---------------------------------
+            if (skinDef.isDisguise) {
+                leftFist.setVisible(false);
+                rightFist.setVisible(false);
+                leftLeg?.setVisible(false);
+                rightLeg?.setVisible(false);
+            }
+            else {
+                leftFist.setVisible(true);
+                rightFist.setVisible(true);
+                leftLeg?.setVisible(true);
+                rightLeg?.setVisible(true);
+            }
+            // ---------------------------------
 
             const { hideEquipment, helmetLevel, vestLevel, backpackLevel } = this;
 
@@ -822,7 +853,6 @@ export class Player extends GameObject<ObjectCategory.Player> {
                 break;
             }
         }
-
         this.images.waterOverlay.setZIndex(this.images.body.zIndex + 1);
         this.container.sortChildren();
     }
