@@ -183,13 +183,13 @@ const maps = {
         ]
     },
     halloween: {
-        width: 1344,
-        height: 1344,
+        width: 1666,
+        height: 1666,
         oceanSize: 128,
         beachSize: 32,
         rivers: {
             minAmount: 1,
-            maxAmount: 3,
+            maxAmount: 1,
             wideChance: 0.2,
             minWidth: 10,
             maxWidth: 16,
@@ -197,8 +197,10 @@ const maps = {
             maxWideWidth: 30
         },
         buildings: {
+            armory: 1,
             refinery: 1,
             warehouse: 4,
+            green_house: 3,
             red_house: 5,
             porta_potty: 10,
             container_3: 1,
@@ -224,7 +226,13 @@ const maps = {
             melee_crate: 1,
             gold_rock: 1,
             flint_stone: 1,
-            pumpkin: 75
+            pumpkin: 90,
+            grenade_crate: 35,
+            stove: 70,
+            fridge: 60,
+            toilet: 55,
+            washing_machine: 50,
+            dead_tree: 125
         },
         loots: {
             ground_loot: 40
