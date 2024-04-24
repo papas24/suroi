@@ -5,6 +5,10 @@ export interface SkinDefinition extends ItemDefinition {
     readonly hideFromLoadout: boolean
     readonly grassTint: boolean
     readonly hideEquipment: boolean
+    readonly isDisguise: boolean
+    readonly material: string
+    readonly obstacle: string
+    readonly explodes: boolean
     readonly roleRequired?: string
 }
 
@@ -15,7 +19,11 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             noDrop: false,
             hideFromLoadout: false,
             grassTint: false,
-            hideEquipment: false
+            hideEquipment: false,
+            isDisguise: false,
+            material: undefined,
+            obstacle: undefined,
+            explodes: false
         }),
         skin_factory: (name: string) => ({
             idString: name.toLowerCase().replace(/'/g, "").replace(/ /g, "_"),
@@ -32,6 +40,17 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             applier: (role: string) => ({
                 roleRequired: role
             })
+        },
+        disguise: {
+            extends: "skin_factory",
+            applier: (obstacle: string, material: string, explodes = false) => ({
+                explodes: explodes,
+                obstacle: obstacle,
+                material: material,
+                isDisguise: true,
+                hideFromLoadout: true,
+                hideEquipment: true,
+            })
         }
     })
 )(
@@ -47,6 +66,16 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("with_role", ["developr"], ["Developr Swag"]),
         simple("with_role", ["designr"], ["Designr Swag"]),
         simple("with_role", ["composr"], ["Composr Swag"]),
+
+        // Halloween Disguises
+        simple("disguise", ["regular_crate", "crate"], ["Guy in a Box"]),
+        simple("disguise", ["grenade_crate", "crate"], ["NATO Employee"]),
+        simple("disguise", ["flint_stone", "stone"], ["FLINT STONES"]),
+        simple("disguise", ["barrel", "metal", true], ["Fish in a Barrel"]),
+        simple("disguise", ["oak_tree", "tree"], ["Barkskin"]),
+        simple("disguise", ["rock", "stone"], ["Rock Solid"]),
+        simple("disguise", ["toilet", "porcelain"], ["Smelly"]),
+
         ...[
             "HAZEL Jumpsuit",
             "The Amateur",
