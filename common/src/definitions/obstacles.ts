@@ -120,7 +120,8 @@ export const Materials = [
     "appliance",
     "large_refinery_barrel",
     "sand",
-    "fence"
+    "fence",
+    "light"
 ] as const;
 
 export enum RotationMode {
@@ -507,7 +508,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
         {
             idString: "halloween_light",
             name: "Halloween Light",
-            material: "glass",
+            material: "light",
             health: 10000,
             indestructible: true,
             noResidue: true,
