@@ -268,7 +268,7 @@ export const Buildings = ObjectDefinitions.create<BuildingDefinition>()(
             // Pumpkin with light (has normal loot like a crate)
             idString: "light_pumpkin",
             name: "Pumpkin",
-            spawnHitbox: RectangleHitbox.fromRect(60, 60),
+            spawnHitbox: RectangleHitbox.fromRect(20, 20),
             scopeHitbox: RectangleHitbox.fromRect(0, 0),
             obstacles: [
                 { idString: "halloween_light", position: Vec.create(0, 0) },
