@@ -28,6 +28,9 @@ import { GameObject } from "./gameObject";
 import { Obstacle } from "./obstacle";
 import { type ParticleEmitter } from "./particles";
 
+// Halloween Disguises
+import { type ObstacleDefinition } from "../../../../common/src/definitions/obstacles";
+
 export class Player extends GameObject<ObjectCategory.Player> {
     override readonly type = ObjectCategory.Player;
 
@@ -862,11 +865,11 @@ export class Player extends GameObject<ObjectCategory.Player> {
                 this.images.leftFist.setZIndex(4);
                 this.images.rightFist.setZIndex(4);
                 this.images.body.setZIndex(2);
-                this.images.weapon.setZIndex(5);
+                this.images.weapon.setZIndex(this.isWearingDisguise ? 1 : 5);
                 break;
             }
         }
-        this.images.waterOverlay.setZIndex(this.images.body.zIndex + 1);
+        this.images.waterOverlay.setZIndex(this.images.body.zIndex + (this.isWearingDisguise ? -1 : 1)); // Halloween disguises layering
         this.container.sortChildren();
     }
 
