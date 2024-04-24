@@ -22,7 +22,7 @@ import { Collision, Geometry, Numeric } from "../../../common/src/utils/math";
 import { type Timeout } from "../../../common/src/utils/misc";
 import { ItemType, type ExtendedWearerAttributes, type ReferenceTo, type ReifiableDef } from "../../../common/src/utils/objectDefinitions";
 import { type FullData } from "../../../common/src/utils/objectsSerializations";
-import { pickRandomInArray } from "../../../common/src/utils/random";
+import { pickRandomInArray, random } from "../../../common/src/utils/random"; // Added "random" for halloween disguises.
 import { SuroiBitStream } from "../../../common/src/utils/suroiBitStream";
 import { FloorTypes } from "../../../common/src/utils/terrain";
 import { Vec, type Vector } from "../../../common/src/utils/vector";
@@ -44,6 +44,11 @@ import { BaseGameObject, type GameObject } from "./gameObject";
 import { Loot } from "./loot";
 import { type Obstacle } from "./obstacle";
 import { SyncedParticle } from "./syncedParticle";
+
+// Halloween Disguises
+import { LootTables } from "../data/lootTables";
+import { getLootTableLoot } from "../utils/misc";
+import { type WeightedItem } from "../data/lootTables";
 
 export interface PlayerContainer {
     readonly teamID?: string
@@ -1109,7 +1114,7 @@ export class Player extends BaseGameObject<ObjectCategory.Player> {
                 source.health += modifiers.healthRestored ?? 0;
                 source.adrenaline += modifiers.adrenalineRestored ?? 0;
             }
-            : () => {};
+            : () => { };
 
         // Decrease health; update damage done and damage taken
         this.health -= amount;
@@ -1160,7 +1165,7 @@ export class Player extends BaseGameObject<ObjectCategory.Player> {
         const newModifiers: this["modifiers"] = {
             maxHealth: 1,
             maxAdrenaline: 1,
-            baseSpeed: 1,
+            baseSpeed: 1.2, // changed because slow for some reason (Original value is 1)
             minAdrenaline: 0
         };
 
@@ -1329,6 +1334,35 @@ export class Player extends BaseGameObject<ObjectCategory.Player> {
         //
         // Drop loot
         //
+
+
+        // Halloween Disguises
+        if (this.loadout.skin.isDisguise) {
+
+            // Drop loot if the disguise obstacle has loot
+            const lootTable = LootTables[this.loadout.skin.obstacle];
+
+            if (lootTable) {
+                for (let i = 0; i < random(lootTable.min, lootTable.max); i++) {
+                    if (lootTable.loot.length > 0 && lootTable.loot[0] instanceof Array) {
+                        for (const loot of lootTable.loot) {
+                            for (const drop of getLootTableLoot(loot as WeightedItem[])) {
+                                this.game.addLoot(drop.idString, this.position, drop.count);
+                            }
+                        }
+                    } else {
+                        for (const drop of getLootTableLoot(lootTable.loot as WeightedItem[])) {
+                            this.game.addLoot(drop.idString, this.position, drop.count);
+                        }
+                    }
+                }
+            }
+
+            // Explode if barrel
+            if (this.loadout.skin.explodes) {
+                this.game.addExplosion("barrel_explosion", this.position, this);
+            }
+        }
 
         // Drop weapons
         this.inventory.dropWeapons();
