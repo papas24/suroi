@@ -173,7 +173,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
                 destroy: 0.5
             },
             spawnMode: MapObjectSpawnMode.GrassAndSand,
-            rotationMode: RotationMode.Full,//RotationMode.Binary,
+            rotationMode: RotationMode.Binary,
             hitbox: RectangleHitbox.fromRect(9.2, 9.2),
             hasLoot: true
         }),
@@ -565,7 +565,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             {
                 idString: "regular_crate",
                 name: "Regular Crate",
-                rotationMode: RotationMode.Full,//RotationMode.Binary,RotationMode.Binary,
+                rotationMode: RotationMode.Binary,
                 frames: {
                     particle: "crate_particle",
                     residue: "regular_crate_residue"
@@ -577,7 +577,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             {
                 idString: "flint_crate",
                 name: "Flint Crate",
-                rotationMode: RotationMode.Full,//RotationMode.None,
+                rotationMode: RotationMode.None,
                 hideOnMap: true
             }
         ),
@@ -586,7 +586,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             {
                 idString: "aegis_crate",
                 name: "AEGIS Crate",
-                rotationMode: RotationMode.Full,//RotationMode.None,
+                rotationMode: RotationMode.None,
                 hideOnMap: true
             }
         ),
@@ -596,7 +596,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
                 idString: "grenade_crate",
                 name: "Grenade Crate",
                 hitbox: RectangleHitbox.fromRect(6.5, 6.3),
-                rotationMode: RotationMode.Full,//RotationMode.None,
+                rotationMode: RotationMode.None,
                 allowFlyover: FlyoverPref.Always
             }
         ),
@@ -606,7 +606,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
                 idString: "melee_crate",
                 name: "Melee Crate",
                 hitbox: RectangleHitbox.fromRect(6.5, 6.3),
-                rotationMode: RotationMode.Full,//RotationMode.None,
+                rotationMode: RotationMode.None,
                 allowFlyover: FlyoverPref.Always
             }
         ),
@@ -853,7 +853,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             },
             hasLoot: true,
             hitbox: RectangleHitbox.fromRect(9.1, 6.45, Vec.create(0, -0.2)),
-            rotationMode: RotationMode.Full,//RotationMode.Limited,
+            rotationMode: RotationMode.Limited,
             allowFlyover: FlyoverPref.Never,
             frames: {
                 particle: "metal_particle"
@@ -871,7 +871,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
                 destroy: 0.8
             },
             hitbox: RectangleHitbox.fromRect(9.1, 6.45, Vec.create(0, -0.2)),
-            rotationMode: RotationMode.Full, //RotationMode.Limited,
+            rotationMode: RotationMode.Limited,
             explosion: "stove_explosion",
             frames: {
                 particle: "metal_particle"
@@ -890,7 +890,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             },
             hasLoot: true,
             hitbox: RectangleHitbox.fromRect(9.1, 6.45, Vec.create(0, -0.2)),
-            rotationMode: RotationMode.Full, //RotationMode.Limited,
+            rotationMode: RotationMode.Limited,
             reflectBullets: true
         },
         {
@@ -950,7 +950,7 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
                 RectangleHitbox.fromRect(v(-3.18, 1.25), v(3.2, 4.05)),
                 new CircleHitbox(2.5)
             ]), */
-            rotationMode: RotationMode.Full,//RotationMode.Limited,
+            rotationMode: RotationMode.Limited,
             hasLoot: true
         },
         {
