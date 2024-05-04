@@ -378,6 +378,7 @@ export const LootTables: Record<string, LootTable> = {
             ],
             [
                 { item: "frag_grenade", count: 3, weight: 2 },
+                { item: "hot_drop", weight: 0.95 },
                 { item: null, weight: 1 }
             ]
         ]
