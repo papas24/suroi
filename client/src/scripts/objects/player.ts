@@ -556,30 +556,27 @@ export class Player extends GameObject<ObjectCategory.Player> {
 
             const { body, leftFist, rightFist, leftLeg, rightLeg, disguise } = this.images;
 
-            if (skinDef.isDisguise) {
-                disguise.setFrame(skinID);
-                disguise.setVisible(true);
-                disguise.setZIndex(10);
-            }
-            else {
-                disguise.setVisible(false);
-                body
-                    .setFrame(`${skinID}_base`)
-                    .setTint(tint);
+            // Check if it's a disguise. The frame will be set anyway.
+            disguise.setVisible(skinDef.isDisguise);
+            disguise.setFrame(skinID);
 
-                leftFist
-                    .setFrame(`${skinID}_fist`)
-                    .setTint(tint);
-                rightFist
-                    .setFrame(`${skinID}_fist`)
-                    .setTint(tint);
-                leftLeg
-                    ?.setFrame(`${skinID}_fist`)
-                    .setTint(tint);
-                rightLeg
-                    ?.setFrame(`${skinID}_fist`)
-                    .setTint(tint);
-            }
+            body
+                .setFrame(skinDef.isDisguise ? skinID : `${skinID}_base`)
+                .setTint(tint);
+
+            // In case it's a disguise, use a default skin fist so we have texture.
+            leftFist
+                .setFrame(skinDef.isDisguise ? "hazel_jumpsuit_fist" : `${skinID}_fist`)
+                .setTint(tint);
+            rightFist
+                .setFrame(skinDef.isDisguise ? "hazel_jumpsuit_fist" : `${skinID}_fist`)
+                .setTint(tint);
+            leftLeg
+                ?.setFrame(skinDef.isDisguise ? "hazel_jumpsuit_fist" : `${skinID}_fist`)
+                .setTint(tint);
+            rightLeg
+                ?.setFrame(skinDef.isDisguise ? "hazel_jumpsuit_fist" : `${skinID}_fist`)
+                .setTint(tint);
 
             const { hideEquipment, helmetLevel, vestLevel, backpackLevel } = this;
 
