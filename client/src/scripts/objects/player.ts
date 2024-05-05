@@ -559,7 +559,7 @@ export class Player extends GameObject<ObjectCategory.Player> {
             // Check if it's a disguise. The frame will be set anyway.
             disguise.setVisible(skinDef.isDisguise);
             if (Loots.fromString<SkinDefinition>(skinID).obstacle) {
-                disguise.setFrame(Loots.fromString<SkinDefinition>(skinID).obstacle);
+                disguise.setFrame(Loots.fromString<SkinDefinition>(skinID).obstacleSprite);
             }
 
             // In case it's a disguise, use a default skin so we have texture.
