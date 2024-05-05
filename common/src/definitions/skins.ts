@@ -8,6 +8,7 @@ export interface SkinDefinition extends ItemDefinition {
     readonly isDisguise: boolean
     readonly material: string
     readonly obstacle: string
+    readonly obstacleSprite: string
     readonly explodes: boolean
     readonly roleRequired?: string
 }
@@ -23,6 +24,7 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             isDisguise: false,
             material: undefined,
             obstacle: undefined,
+            obstacleSprite: undefined,
             explodes: false
         }),
         skin_factory: (name: string) => ({
@@ -46,6 +48,7 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             applier: (obstacle: string, material: string, explodes = false) => ({
                 explodes: explodes,
                 obstacle: obstacle,
+                obstacleSprite: obstacle === "rock" ? `${obstacle}_1` : obstacle,
                 material: material,
                 isDisguise: true,
                 hideFromLoadout: true,
