@@ -560,11 +560,11 @@ export class Player extends GameObject<ObjectCategory.Player> {
             disguise.setVisible(skinDef.isDisguise);
             disguise.setFrame(skinID);
 
+            // In case it's a disguise, use a default skin so we have texture.
             body
-                .setFrame(skinDef.isDisguise ? skinID : `${skinID}_base`)
+                .setFrame(skinDef.isDisguise ? "hazel_jumpsuit_base" : `${skinID}_base`)
                 .setTint(tint);
 
-            // In case it's a disguise, use a default skin fist so we have texture.
             leftFist
                 .setFrame(skinDef.isDisguise ? "hazel_jumpsuit_fist" : `${skinID}_fist`)
                 .setTint(tint);
