@@ -173,30 +173,37 @@ export const LootTables: Record<string, LootTable> = {
         min: 1,
         max: 1,
         loot: [
-           { item: "s_g17", weight: 0.95 },
-           { item: "usas12", weight: 0.05 },
-           { tier: "disguises", weight: 0.94 }
+            { item: "s_g17", weight: 0.95 },
+            { item: "usas12", weight: 0.05 },
+            { tier: "disguises", weight: 0.94 }
         ]
     },
     dark_pumpkin: {
-        min: 2,
-        max: 2,
+        min: 1,
+        max: 1,
         loot: [
-            { tier: "guns", weight: 1.25 },
-            { tier: "equipment", weight: 1 },
-            { tier: "healing_items", weight: 1 },
-            { tier: "ammo", weight: 0.5 },
-            { tier: "scopes", weight: 0.3 },
-            { tier: "throwables", weight: 0.3 },
-            { tier: "melee", weight: 0.04 },
-            { tier: "disguises", weight: 0.6 }
+            [
+                { tier: "guns", weight: 1.25 },
+                { tier: "equipment", weight: 1 },
+                { tier: "healing_items", weight: 1 },
+                { tier: "ammo", weight: 0.5 },
+                { tier: "scopes", weight: 0.3 },
+                { tier: "throwables", weight: 0.3 },
+                { tier: "melee", weight: 0.04 }
+            ],
+            [
+                { tier: "disguises", weight: 0.65 },
+                { tier: "guns", weight: 1 },
+                { tier: "healing_items", weight: 1 },
+                { tier: "ammo", weight: 1 },
+            ]
         ]
     },
     usas_pumpkin: {
         min: 1,
         max: 1,
         loot: [
-           { item: "usas12", weight: 1 },
+            { item: "usas12", weight: 1 },
         ]
     },
     blueberry_bush: {
@@ -439,16 +446,33 @@ export const LootTables: Record<string, LootTable> = {
         ]
     },
     dead_tree_big: {
-        min: 4,
-        max: 5,
-        loot: [
-            { tier: "disguises", weight: 1 },
-            { item: "spooky_barkskin", weight: 0.25 },
-            { tier: "special_guns", weight: 1 },
-            { tier: "special_equipment", weight: 0.65 },
-            { tier: "special_healing_items", weight: 0.65 },
-            { tier: "special_scopes", weight: 0.3 },
-            { item: "radio", weight: 0.1 }
+        min: 1,
+        max: 1,
+        loot: [ // TODO: improve this thing
+            [
+                { tier: "disguises", weight: 1 },
+                { item: "spooky_barkskin", weight: 0.25 }
+            ],
+            [
+                { tier: "special_guns", weight: 1 },
+            ],
+            [
+                { tier: "special_guns", weight: 1 },
+            ],
+            [
+                { tier: "special_guns", weight: 1 },
+                { item: "radio", weight: 0.1 }
+            ],
+            [
+                { tier: "special_equipment", weight: 0.65 },
+                { tier: "special_healing_items", weight: 0.65 },
+                { tier: "special_scopes", weight: 0.3 },
+            ],
+            [
+                { tier: "special_equipment", weight: 0.65 },
+                { tier: "special_healing_items", weight: 0.65 },
+                { tier: "special_scopes", weight: 0.3 },
+            ]
         ]
     },
     gun_case: {
@@ -532,12 +556,12 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "fish_in_a_barrel", weight: 0.8 },
         { item: "goldfish_in_a_barrel", weight: 0.1 },
         { item: "guy_in_a_box", weight: 0.85 },
-        { item: "nato_employee", weight: 0.6 },
+        { item: "boombox", weight: 0.6 },
         { item: "flint_stones", weight: 0.09 },
-        { item: "barkskin", weight: 0.7 },
+        { item: "the_lorax", weight: 0.7 },
         { item: "rock_solid", weight: 0.7 },
         { item: "smelly", weight: 0.67 },
-        { item: "walking_can", weight: 0.37 },
+        { item: "indistructible", weight: 0.37 },
         { item: "c-cleaner", weight: 0.37 },
         { item: "one_with_cooking", weight: 0.65 },
         { item: "large_suicide_bomber", weight: 0.001 }
