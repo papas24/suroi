@@ -189,13 +189,15 @@ const maps = {
         beachSize: 32,
         rivers: {
             minAmount: 1,
-            maxAmount: 1,
+            maxAmount: 2,
             wideChance: 0.2,
             minWidth: 10,
-            maxWidth: 16,
+            maxWidth: 12,
             minWideWidth: 25,
             maxWideWidth: 30
         },
+        bridges: ["small_bridge"],
+        majorBuildings: ["armory", "refinery"],
         buildings: {
             armory: 1,
             refinery: 1,
