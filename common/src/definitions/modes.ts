@@ -32,7 +32,7 @@ export const Modes: ModeDefinition[] = [
             water: "hsl(4, 100%, 14%)",
             border: "hsl(4, 90%, 12%)",
             beach: "hsl(33, 77%, 21%)",
-            riverBank: "hsl(33, 50%, 30%)",
+            riverBank: "hsl(33, 77%, 21%)",
             gas: "hsla(17, 100%, 50%, 0.55)"
         },
         specialMenuMusic: true,
