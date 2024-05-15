@@ -461,6 +461,9 @@ export const LootTables: Record<string, LootTable> = {
             ],
             [
                 { tier: "special_guns", weight: 1 },
+            ],
+            [
+                { tier: "special_guns", weight: 1 },
                 { item: "radio", weight: 0.1 }
             ],
             [
