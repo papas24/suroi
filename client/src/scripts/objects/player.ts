@@ -581,7 +581,7 @@ export class Player extends GameObject<ObjectCategory.Player> {
             disguiseResidue.setVisible(skinDef.isDisguise && this.dead);
             if (Loots.fromString<SkinDefinition>(skinID).obstacle) {
                 disguise.setFrame(Loots.fromString<SkinDefinition>(skinID).obstacleSprite);
-                disguiseResidue.setFrame(`${Loots.fromString<SkinDefinition>(skinID).obstacle}_residue`);
+                disguiseResidue.setFrame(`${Loots.fromString<SkinDefinition>(skinID).obstacleSprite === "tear_gas_crate" ? "regular_crate" : Loots.fromString<SkinDefinition>(skinID).obstacleSprite}_residue`);
             }
 
             // In case it's a disguise, use a default skin so we have texture.
