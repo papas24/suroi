@@ -1,1652 +1,1230 @@
-import { sound } from "@pixi/sound";
 import $ from "jquery";
-import { Color, isMobile, isWebGPUSupported } from "pixi.js";
-import { GameConstants, InputActions, SpectateActions, TeamSize } from "../../../common/src/constants";
-import { Ammos } from "../../../common/src/definitions/ammos";
-import { Badges } from "../../../common/src/definitions/badges";
-import { Emotes } from "../../../common/src/definitions/emotes";
-import { HealType, HealingItems } from "../../../common/src/definitions/healingItems";
-import { Scopes } from "../../../common/src/definitions/scopes";
-import { Skins } from "../../../common/src/definitions/skins";
-import { SpectatePacket } from "../../../common/src/packets/spectatePacket";
-import { CustomTeamMessages, type CustomTeamMessage, type CustomTeamPlayerInfo, type GetGameResponse } from "../../../common/src/typings";
-import { ItemType } from "../../../common/src/utils/objectDefinitions";
-import { pickRandomInArray } from "../../../common/src/utils/random";
-import { Vec } from "../../../common/src/utils/vector";
-import { Config } from "./config";
-import { type Game } from "./game";
-import { news } from "./news/newsPosts";
-import { body, createDropdown } from "./uiHelpers";
-import { defaultClientCVars, type CVarTypeMapping } from "./utils/console/defaultClientCVars";
-import { UI_DEBUG_MODE, emoteSlots } from "./utils/constants";
-import { Crosshairs, getCrosshair } from "./utils/crosshairs";
-import { requestFullscreen } from "./utils/misc";
+import { type Color } from "pixi.js";
+import { DEFAULT_INVENTORY, GameConstants, KillfeedEventSeverity, KillfeedEventType, KillfeedMessageType } from "../../../../common/src/constants";
+import { Ammos } from "../../../../common/src/definitions/ammos";
+import { type BadgeDefinition } from "../../../../common/src/definitions/badges";
+import { type EmoteDefinition } from "../../../../common/src/definitions/emotes";
+import { type GunDefinition } from "../../../../common/src/definitions/guns";
+import { Loots } from "../../../../common/src/definitions/loots";
+import { MapPings } from "../../../../common/src/definitions/mapPings";
+import { DEFAULT_SCOPE, type ScopeDefinition } from "../../../../common/src/definitions/scopes";
+import { type GameOverPacket } from "../../../../common/src/packets/gameOverPacket";
+import { type KillFeedMessage, type PlayerData, type UpdatePacket } from "../../../../common/src/packets/updatePacket";
+import { Numeric } from "../../../../common/src/utils/math";
+import { freezeDeep } from "../../../../common/src/utils/misc";
+import { ItemType } from "../../../../common/src/utils/objectDefinitions";
+import { type Vector } from "../../../../common/src/utils/vector";
+import { type Game } from "../game";
+import { type GameObject } from "../objects/gameObject";
+import { Player } from "../objects/player";
+import { GHILLIE_TINT, TEAMMATE_COLORS, UI_DEBUG_MODE } from "../utils/constants";
+import { formatDate } from "../utils/misc";
+import { SuroiSprite, toPixiCoords } from "../utils/pixi";
 
-interface RegionInfo {
-    name: string
-    mainAddress: string
-    gameAddress: string
-    playerCount?: number
-    maxTeamSize?: number
-    nextSwitchTime?: number
-    ping?: number
+// Needed for disguises display
+import { type SkinDefinition } from "../../../../common/src/definitions/skins";
+
+function safeRound(value: number): number {
+    // this looks more math-y and easier to read, so eslint can shove it
+    // eslint-disable-next-line yoda
+    if (0 < value && value <= 1) return 1;
+    return Math.round(value);
 }
 
-let selectedRegion: RegionInfo;
+/**
+ * This class manages the game UI
+ */
+export class UIManager {
+    readonly game: Game;
 
-const regionInfo: Record<string, RegionInfo> = Config.regions;
+    maxHealth = GameConstants.player.defaultHealth;
+    health = GameConstants.player.defaultHealth;
 
-export let teamSocket: WebSocket | undefined;
-let teamID: string | undefined | null;
-let joinedTeam = false;
-let autoFill = false;
+    maxAdrenaline = GameConstants.player.maxAdrenaline;
+    minAdrenaline = 0;
+    adrenaline = 0;
 
-export function resetPlayButtons(): void {
-    $("#splash-options").removeClass("loading");
+    readonly inventory: {
+        activeWeaponIndex: number
+        weapons: PlayerData["inventory"]["weapons"] & object
+        items: typeof DEFAULT_INVENTORY
+        scope: ScopeDefinition
+    } = {
+            activeWeaponIndex: 0,
+            weapons: new Array(GameConstants.player.maxWeapons).fill(undefined),
+            items: JSON.parse(JSON.stringify(DEFAULT_INVENTORY)),
+            scope: DEFAULT_SCOPE
+        };
 
-    const info = selectedRegion ?? regionInfo[Config.defaultRegion];
-    const isSolo = info.maxTeamSize === TeamSize.Solo;
-    const isDuo = info.maxTeamSize === TeamSize.Duo;
+    emotes: Array<EmoteDefinition | undefined> = [];
 
-    $("#btn-play-solo").toggleClass("locked", isDuo);
-    $(".team-btns-container").toggleClass("locked", isSolo);
-    $("#locked-msg").css("top", isSolo ? "227px" : isDuo ? "153px" : "").toggle(isSolo || isDuo);
-}
+    teammates: UpdatePacket["playerData"]["teammates"] = [];
 
-export async function setUpUI(game: Game): Promise<void> {
-    if (UI_DEBUG_MODE) {
-        // Kill message
-        $("#kill-msg-kills").text("Kills: 7");
-        $("#kill-msg-player-name").html("Player");
-        $("#kill-msg-weapon-used").text(" with Mosin-Nagant (streak: 255)");
-        $("#kill-msg").show();
-
-        // Spectating message
-        $("#spectating-msg-player").html("Player");
-        $("#spectating-container").show();
-
-        // Gas message
-        $("#gas-msg-info")
-            .text("Toxic gas is advancing! Move to the safe zone")
-            .css("color", "cyan");
-        $("#gas-msg").show();
-
-        $("#weapon-ammo-container").show();
-
-        // Kill feed messages
-        for (let i = 0; i < 5; i++) {
-            const killFeedItem = $("<div>");
-            killFeedItem.addClass("kill-feed-item");
-            // noinspection HtmlUnknownTarget
-            killFeedItem.html(
-                '<img class="kill-icon" src="./img/misc/skull_icon.svg" alt="Skull"> Player killed Player with Mosin-Nagant'
-            );
-            $("#kill-feed").prepend(killFeedItem);
-        }
-    }
-
-    const params = new URLSearchParams(window.location.search);
-
-    // Switch regions with the ?region="name" Search Parameter
-    if (params.has("region")) {
-        (() => {
-            const region = params.get("region");
-            params.delete("region");
-            if (region === null) return;
-            if (!Object.hasOwn(Config.regions, region)) return;
-            game.console.setBuiltInCVar("cv_region", region);
-        })();
-    }
-
-    // Load news
-    let newsText = "";
-    for (const newsPost of news.slice(0, 5)) {
-        const date = new Date(newsPost.date).toLocaleDateString("default", {
-            month: "long",
-            day: "numeric",
-            year: "numeric"
-        });
-
-        newsText += '<article class="splash-news-entry">';
-        newsText += `<div class="news-date">${date}</div>`;
-        newsText += `<div class="news-title">${newsPost.title}</div>`;
-        newsText += `<p>${newsPost.content}<br><i>- ${newsPost.author}</i></p></article>`;
-    }
-
-    $("#news-posts").html(newsText);
-
-    // createDropdown("#splash-more");
-
-    $("#locked-info").on("click", () => $("#locked-tooltip").fadeToggle(250));
-
-    const pad = (n: number): string | number => n < 10 ? `0${n}` : n;
-    const updateSwitchTime = (): void => {
-        if (!selectedRegion?.nextSwitchTime) {
-            $("#locked-time").text("--:--:--");
-            return;
-        }
-        const millis = selectedRegion.nextSwitchTime - Date.now();
-        if (millis < 0) {
-            location.reload();
-            return;
-        }
-        const hours = Math.floor(millis / 3600000) % 24;
-        const minutes = Math.floor(millis / 60000) % 60;
-        const seconds = Math.floor(millis / 1000) % 60;
-        $("#locked-time").text(`${pad(hours)}:${pad(minutes)}:${pad(seconds)}`);
-    };
-    setInterval(updateSwitchTime, 1000);
-
-    const regionMap = Object.entries(regionInfo);
-    const serverList = $("#server-list");
-
-    // Load server list
-    for (const [regionID, region] of regionMap) {
-        const listItem = $(`
-                <li class="server-list-item" data-region="${regionID}">
-                    <span class="server-name">${region.name}</span>
-                    <span style="margin-left: auto">
-                      <img src="./img/misc/player_icon.svg" width="16" height="16" alt="Player count">
-                      <span class="server-player-count">-</span>
-                    </span>
-                </li>
-            `);
-        /* <span style="margin-left: 5px">
-          <img src="./img/misc/ping_icon.svg" width="16" height="16" alt="Ping">
-          <span class="server-ping">-</span>
-        </span> */
-        serverList.append(listItem);
-    }
-
-    // Get player counts + find server w/ best ping
-    let bestPing = Number.MAX_VALUE;
-    let bestRegion: string | undefined;
-    for (const [regionID, region] of regionMap) {
-        const listItem = $(`.server-list-item[data-region=${regionID}]`);
-        try {
-            const pingStartTime = Date.now();
-            const serverInfo = await (await fetch(`${region.mainAddress}/api/serverInfo`, { signal: AbortSignal.timeout(5000) }))?.json();
-            const ping = Date.now() - pingStartTime;
-
-            if (serverInfo.protocolVersion !== GameConstants.protocolVersion) {
-                console.error(`Protocol version mismatch for region ${regionID}. Expected ${GameConstants.protocolVersion}, got ${serverInfo.protocolVersion}`);
-                continue;
-            }
-
-            regionInfo[regionID] = {
-                ...region,
-                ...serverInfo,
-                ping
-            };
-
-            listItem.find(".server-player-count").text(serverInfo.playerCount ?? "-");
-            // listItem.find(".server-ping").text(typeof playerCount === "string" ? ping : "-");
-
-            if (ping < bestPing) {
-                bestPing = ping;
-                bestRegion = regionID;
-            }
-        } catch (e) {
-            console.error(`Failed to load server info for region ${regionID}. Details:`, e);
-        }
-    }
-
-    const updateServerSelectors = (): void => {
-        if (!selectedRegion) { // Handle invalid region
-            selectedRegion = regionInfo[Config.defaultRegion];
-            game.console.setBuiltInCVar("cv_region", "");
-        }
-        $("#server-name").text(selectedRegion.name);
-        $("#server-player-count").text(selectedRegion.playerCount ?? "-");
-        // $("#server-ping").text(selectedRegion.ping && selectedRegion.ping > 0 ? selectedRegion.ping : "-");
-        updateSwitchTime();
-        resetPlayButtons();
-    };
-
-    selectedRegion = regionInfo[(game.console.getBuiltInCVar("cv_region") || bestRegion) ?? Config.defaultRegion];
-    updateServerSelectors();
-
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    serverList.children("li.server-list-item").on("click", async function(this: HTMLLIElement) {
-        const region = this.getAttribute("data-region");
-
-        if (region === null) return;
-
-        const info = regionInfo[region];
-        if (info === undefined) return;
-
-        resetPlayButtons();
-
-        selectedRegion = info;
-
-        game.console.setBuiltInCVar("cv_region", region);
-
-        updateServerSelectors();
+    readonly debugReadouts = Object.freeze({
+        fps: $("#fps-counter"),
+        ping: $("#ping-counter"),
+        pos: $("#coordinates-hud")
     });
 
-    const joinGame = (): void => {
-        $("#splash-options").addClass("loading");
-        void $.get(`${selectedRegion.mainAddress}/api/getGame${teamID ? `?teamID=${teamID}` : ""}`, (data: GetGameResponse) => {
-            if (data.success) {
-                const params = new URLSearchParams();
+    constructor(game: Game) {
+        this.game = game;
+    }
 
-                if (teamID) params.set("teamID", teamID);
-                if (autoFill) params.set("autoFill", String(autoFill));
+    getRawPlayerName(id: number): string {
+        const player = this.game.playerNames.get(id);
+        let name: string;
 
-                const devPass = game.console.getBuiltInCVar("dv_password");
-                if (devPass) params.set("password", devPass);
+        if (!player) {
+            console.warn(`Unknown player name with id ${id}`);
+            name = "[Unknown Player]";
+        } else if (this.game.console.getBuiltInCVar("cv_anonymize_player_names")) {
+            name = `${GameConstants.player.defaultName}_${id}`;
+        } else {
+            name = player.name;
+        }
 
-                const role = game.console.getBuiltInCVar("dv_role");
-                if (role) params.set("role", role);
+        return name;
+    }
 
-                const lobbyClearing = game.console.getBuiltInCVar("dv_lobby_clearing");
-                if (lobbyClearing) params.set("lobbyClearing", "true");
+    getPlayerName(id: number): string {
+        const element = $("<span>");
+        const player = this.game.playerNames.get(id);
 
-                const weaponPreset = game.console.getBuiltInCVar("dv_weapon_preset");
-                if (weaponPreset) params.set("weaponPreset", weaponPreset);
+        const name = this.getRawPlayerName(id);
 
-                const nameColor = game.console.getBuiltInCVar("dv_name_color");
-                if (nameColor) {
-                    try {
-                        params.set("nameColor", new Color(nameColor).toNumber().toString());
-                    } catch (e) {
-                        game.console.setBuiltInCVar("dv_name_color", "");
-                        console.error(e);
+        if (player && player.hasColor && !this.game.console.getBuiltInCVar("cv_anonymize_player_names")) {
+            element.css("color", player.nameColor.toHex());
+        }
+
+        element.text(name);
+
+        return element.prop("outerHTML");
+    }
+
+    getPlayerBadge(id: number): BadgeDefinition | undefined {
+        if (this.game.console.getBuiltInCVar("cv_anonymize_player_names")) {
+            return;
+        }
+
+        const player = this.game.playerNames.get(id);
+
+        switch (true) {
+            case this.game.console.getBuiltInCVar("cv_anonymize_player_names"): {
+                return;
+            }
+            case player === undefined: {
+                console.warn(`Unknown player name with id ${id}`); return;
+            }
+            default: {
+                return player.badge;
+            }
+        }
+    }
+
+    static getHealthColor(normalizedHealth: number, downed?: boolean): string {
+        switch (true) {
+            case normalizedHealth <= 0.25:
+            case downed:
+                return "#ff0000";
+            case normalizedHealth > 0.25 && normalizedHealth < 0.6:
+                return `rgb(255, ${((normalizedHealth * 100) - 10) * 4}, ${((normalizedHealth * 100) - 10) * 4})`;
+            case normalizedHealth === 1:
+                return "#bdc7d0";
+            default:
+                return "#f8f9fa";
+        }
+    }
+
+    readonly ui = {
+        ammoCounterContainer: $("#weapon-ammo-container"),
+        activeAmmo: $("#weapon-clip-ammo"),
+        reserveAmmo: $("#weapon-inventory-ammo"),
+        killStreakIndicator: $("#killstreak-indicator-container"),
+        killStreakCounter: $("#killstreak-indicator-counter"),
+
+        weaponsContainer: $("#weapons-container"),
+
+        minMaxAdren: $("#adrenaline-bar-min-max"),
+        maxHealth: $("#health-bar-max"),
+
+        healthBar: $("#health-bar"),
+        healthBarAmount: $("#health-bar-percentage"),
+        healthAnim: $("#health-bar-animation"),
+
+        adrenalineBar: $("#adrenaline-bar"),
+        adrenalineBarPercentage: $("#adrenaline-bar-percentage"),
+
+        killModal: $("#kill-msg"),
+        killFeed: $("#kill-feed"),
+
+        interactMsg: $("#interact-message"),
+        interactKey: $("#interact-key"),
+
+        teamContainer: $("#team-container"),
+
+        emoteSelectors: [".emote-top", ".emote-right", ".emote-bottom", ".emote-left"]
+            .map(selector => $(`#emote-wheel > ${selector}`))
+    };
+
+    readonly action = {
+        active: false,
+        /*
+            whether this timer corresponds to an actual action being carried
+            out by this player (like reloading), or if it corresponds to some
+            other timed event that just so happens to piggyback off this timer
+            system (getting revived). pretty much only exists for the
+            aforementioned case of being revived, and prevents the "cancel" popup
+            from appearing
+        */
+        fake: false,
+        start: -1,
+        time: 0
+    };
+
+    animateAction(name: string, time: number, fake = false): void {
+        this.action.fake = fake;
+        if (time > 0) {
+            this.action.start = Date.now();
+            $("#action-timer-anim")
+                .stop()
+                .css({ "stroke-dashoffset": "226" })
+                .animate(
+                    { "stroke-dashoffset": "0" },
+                    time * 1000,
+                    "linear",
+                    () => {
+                        $("#action-container").hide();
+                        this.action.active = false;
                     }
-                }
+                );
+        }
 
-                game.connect(`${selectedRegion.gameAddress.replace("<ID>", (data.gameID + 1).toString())}/play?${params.toString()}`);
-                $("#splash-server-message").hide();
-            } else {
-                let showWarningModal = false;
-                let title: string | undefined;
-                let message: string;
-                switch (data.message) {
-                    case "warning":
-                        showWarningModal = true;
-                        title = "Teaming is against the rules!";
-                        message = "You have been reported for teaming. Allying with other players for extended periods is not allowed. If you continue to team, you will be banned.";
-                        break;
-                    case "tempBan":
-                        showWarningModal = true;
-                        title = "You have been banned for 1 day for teaming!";
-                        message = "Remember, allying with other players for extended periods is not allowed!<br><br>When your ban is up, reload the page to clear this message.";
-                        break;
-                    case "permaBan":
-                        showWarningModal = true;
-                        title = "You have been permanently banned for hacking!";
-                        message = "The use of scripts, plugins, extensions, etc. to modify the game in order to gain an advantage over opponents is strictly forbidden.";
-                        break;
-                    default:
-                        message = "Error joining game.<br>Please try again.";
-                        break;
-                }
-                if (showWarningModal) {
-                    $("#warning-modal-title").text(title ?? "");
-                    $("#warning-modal-text").html(message ?? "");
-                    $("#warning-modal-agree-options").toggle(data.message === "warning");
-                    $("#warning-modal-agree-checkbox").prop("checked", false);
-                    $("#warning-modal").show();
-                    $("#splash-options").addClass("loading");
-                } else {
-                    $("#splash-server-message-text").html(message);
-                    $("#splash-server-message").show();
-                }
-                resetPlayButtons();
+        if (name) {
+            $("#action-name").text(name);
+            $("#action-container").show();
+        }
+
+        this.action.active = true;
+        this.action.time = time;
+    }
+
+    updateAction(): void {
+        const amount = this.action.time - (Date.now() - this.action.start) / 1000;
+        if (amount > 0) $("#action-time").text(amount.toFixed(1));
+    }
+
+    cancelAction(): void {
+        $("#action-container")
+            .hide()
+            .stop();
+        this.action.active = false;
+    }
+
+    gameOverScreenTimeout: number | undefined;
+
+    showGameOverScreen(packet: GameOverPacket): void {
+        const game = this.game;
+
+        $("#interact-message").hide();
+        $("#spectating-container").hide();
+
+        game.activePlayer?.actionSound?.stop();
+
+        $("#gas-msg").fadeOut(500);
+
+        // Disable joysticks div so you can click on players to spectate
+        $("#joysticks-containers").hide();
+
+        const gameOverScreen = $("#game-over-overlay");
+
+        game.gameOver = true;
+
+        if (!packet.won) {
+            $("#btn-spectate").removeClass("btn-disabled").show();
+            game.map.indicator.setFrame("player_indicator_dead");
+        } else {
+            $("#btn-spectate").hide();
+        }
+
+        $("#chicken-dinner").toggle(packet.won);
+
+        const playerName = this.getPlayerName(packet.playerID);
+        const playerBadge = this.getPlayerBadge(packet.playerID);
+        const playerBadgeText = playerBadge
+            ? `<img class="badge-icon" src="./img/game/badges/${playerBadge.idString}.svg" alt="${playerBadge.name} badge">`
+            : "";
+
+        $("#game-over-text").html(
+            packet.won
+                ? "Winner winner chicken dinner!"
+                : `${this.game.spectating ? this.getPlayerName(packet.playerID) : "You"} died.`
+        );
+
+        $("#game-over-player-name").html(playerName + playerBadgeText);
+
+        $("#game-over-kills").text(packet.kills);
+        $("#game-over-damage-done").text(packet.damageDone);
+        $("#game-over-damage-taken").text(packet.damageTaken);
+        $("#game-over-time").text(formatDate(packet.timeAlive));
+
+        if (packet.won) void game.music.play();
+
+        this.gameOverScreenTimeout = window.setTimeout(() => gameOverScreen.fadeIn(500), 500);
+
+        // Player rank
+        $("#game-over-rank").text(`#${packet.rank}`).toggleClass("won", packet.won);
+    }
+
+    readonly mapPings = ["warning_ping", "arrow_ping", "gift_ping", "heal_ping"].map(ping => MapPings.fromString(ping));
+
+    updateEmoteWheel(): void {
+        const { pingWheelActive } = this.game.inputManager;
+        for (let i = 0; i < 4; i++) {
+            const definition = pingWheelActive ? this.mapPings[i] : this.emotes[i];
+
+            this.ui.emoteSelectors[i].css(
+                "background-image",
+                definition ? `url("./img/game/${pingWheelActive ? "mapPings" : "emotes"}/${definition.idString}.svg")` : ""
+            );
+        }
+    }
+
+    private readonly _teammateDataCache = new Map<number, PlayerHealthUI>();
+    clearTeammateCache(): void {
+        for (const [, entry] of this._teammateDataCache) {
+            entry.destroy();
+        }
+
+        this._teammateDataCache.clear();
+    }
+
+    lastHealthBarAnimTime = 0;
+    oldHealth = 0;
+
+    updateUI(data: PlayerData): void {
+        if (data.id !== undefined) this.game.activePlayerID = data.id;
+
+        if (data.dirty.id) {
+            this.game.spectating = data.spectating;
+            if (data.spectating) {
+                $("#game-over-overlay").fadeOut();
+                $("#spectating-msg-player").html(this.getPlayerName(data.id));
             }
-        }).fail(() => {
-            $("#splash-server-message-text").html("Error finding game.<br>Please try again.");
-            $("#splash-server-message").show();
-            resetPlayButtons();
-        });
-    };
+            $("#spectating-container").toggle(data.spectating);
+        }
 
-    let lastPlayButtonClickTime = 0;
+        if (data.dirty.teammates && this.game.teamMode) {
+            this.teammates = data.teammates;
 
-    // Join server when play buttons are clicked
-    $("#btn-play-solo, #btn-play-duo").on("click", () => {
-        const now = Date.now();
-        if (now - lastPlayButtonClickTime < 1500) return; // Play button rate limit
-        lastPlayButtonClickTime = now;
-        joinGame();
-    });
+            const _teammateDataCache = this._teammateDataCache;
+            const notVisited = new Set(_teammateDataCache.keys());
 
-    const createTeamMenu = $("#create-team-menu");
-    $("#btn-create-team, #btn-join-team").on("click", function() {
-        const now = Date.now();
-        if (now - lastPlayButtonClickTime < 1500 || teamSocket) return;
-        lastPlayButtonClickTime = now;
+            [
+                {
+                    id: this.game.activePlayerID,
+                    normalizedHealth: this.health / this.maxHealth,
+                    downed: this.game.activePlayer?.downed,
+                    disconnected: false,
+                    position: undefined
+                },
+                ...data.teammates
+            ].forEach((player, index) => {
+                const { id } = player;
+                notVisited.delete(id);
 
-        $("#splash-options").addClass("loading");
-
-        const params = new URLSearchParams();
-
-        const joiningTeam = $(this).attr("id") === "btn-join-team";
-        if (joiningTeam) {
-            $("#btn-start-game").addClass("btn-disabled").text("Waiting...");
-            $("#create-team-toggles").addClass("disabled");
-
-            let gotTeamID = !!teamID;
-            while (!gotTeamID) {
-                teamID = prompt("Enter a team code:");
-                if (!teamID) {
-                    resetPlayButtons();
+                if (_teammateDataCache.has(id)) {
+                    _teammateDataCache.get(id)!.update({
+                        ...player,
+                        colorIndex: index
+                    });
                     return;
                 }
-                if (teamID.includes("#")) {
-                    teamID = teamID.split("#")[1];
-                }
-                if (/^[a-zA-Z0-9]{4}$/.test(teamID)) {
-                    gotTeamID = true;
-                    break;
-                } else {
-                    alert("Invalid team code.");
-                }
-            }
-            params.set("teamID", teamID!);
-        } else {
-            $("#btn-start-game").removeClass("btn-disabled").text("Start Game");
-            $("#create-team-toggles").removeClass("disabled");
-        }
 
-        params.set("name", game.console.getBuiltInCVar("cv_player_name"));
-        params.set("skin", game.console.getBuiltInCVar("cv_loadout_skin"));
-
-        const badge = game.console.getBuiltInCVar("cv_loadout_badge");
-        if (badge) params.set("badge", badge);
-
-        const devPass = game.console.getBuiltInCVar("dv_password");
-        if (devPass) params.set("password", devPass);
-
-        const role = game.console.getBuiltInCVar("dv_role");
-        if (role) params.set("role", role);
-
-        const nameColor = game.console.getBuiltInCVar("dv_name_color");
-        if (nameColor) {
-            try {
-                params.set("nameColor", new Color(nameColor).toNumber().toString());
-            } catch (e) {
-                game.console.setBuiltInCVar("dv_name_color", "");
-                console.error(e);
-            }
-        }
-
-        teamSocket = new WebSocket(`${selectedRegion.mainAddress.replace("http", "ws")}/team?${params.toString()}`);
-
-        const getPlayerHTML = (p: CustomTeamPlayerInfo): string =>
-            `
-            <div class="create-team-player-container" data-id="${p.id}">
-              <i class="fa-solid fa-crown"${p.isLeader ? "" : ' style="display: none"'}></i>
-              <div class="skin">
-                <div class="skin-base" style="background-image: url('./img/game/skins/${p.skin}_base.svg')"></div>
-                <div class="skin-left-fist" style="background-image: url('./img/game/skins/${p.skin}_fist.svg')"></div>
-                <div class="skin-right-fist" style="background-image: url('./img/game/skins/${p.skin}_fist.svg')"></div>
-              </div>
-              <div class="create-team-player-name-container">
-                <span class="create-team-player-name"${p.nameColor ? ` style="color: ${new Color(p.nameColor).toHex()}"` : ""};>${p.name}</span>
-                ${p.badge ? `<img class="create-team-player-badge" src="./img/game/badges/${p.badge}.svg" />` : ""}
-              </div>
-            </div>
-            `;
-
-        let playerID: number;
-
-        teamSocket.onmessage = (message: MessageEvent<string>): void => {
-            const data = JSON.parse(message.data) as CustomTeamMessage;
-            switch (data.type) {
-                case CustomTeamMessages.Join: {
-                    joinedTeam = true;
-                    playerID = data.id;
-                    teamID = data.teamID;
-                    window.location.hash = `#${teamID}`;
-                    $("#create-team-url-field").val(`${window.location.origin}/?region=${game.console.getBuiltInCVar("cv_region")}#${teamID}`);
-                    $("#create-team-toggle-auto-fill").prop("checked", data.autoFill);
-                    $("#create-team-toggle-lock").prop("checked", data.locked);
-                    $("#create-team-players").html(data.players.map(getPlayerHTML).join(""));
-                    break;
-                }
-                case CustomTeamMessages.PlayerJoin: {
-                    $("#create-team-players").append(getPlayerHTML(data));
-                    break;
-                }
-                case CustomTeamMessages.PlayerLeave: {
-                    $("#create-team-players").find(`[data-id="${data.id}"]`).remove();
-                    if (data.newLeaderID !== undefined) {
-                        $("#create-team-players").find(`[data-id="${data.newLeaderID}"] .fa-crown`).show();
-                        if (data.newLeaderID === playerID) {
-                            $("#btn-start-game").removeClass("btn-disabled").text("Start Game");
-                            $("#create-team-toggles").removeClass("disabled");
-                        }
+                const nameData = this.game.playerNames.get(id);
+                const ele = new PlayerHealthUI(
+                    this.game,
+                    {
+                        id,
+                        colorIndex: index,
+                        downed: player.downed,
+                        normalizedHealth: player.normalizedHealth,
+                        position: player.position,
+                        hasColor: nameData?.hasColor,
+                        nameColor: nameData?.hasColor ? nameData.nameColor : null,
+                        name: nameData?.name,
+                        badge: nameData?.badge ?? null
                     }
-                    break;
-                }
-                case CustomTeamMessages.Settings: {
-                    $("#create-team-toggle-auto-fill").prop("checked", data.autoFill);
-                    $("#create-team-toggle-lock").prop("checked", data.locked);
-                    break;
-                }
-                case CustomTeamMessages.Started: {
-                    createTeamMenu.hide();
-                    joinGame();
-                    break;
-                }
-            }
-        };
-
-        teamSocket.onerror = (): void => {
-            $("#splash-server-message-text").html("Error joining team.<br>It may not exist or it is full.");
-            $("#splash-server-message").show();
-            resetPlayButtons();
-            createTeamMenu.fadeOut(250);
-        };
-
-        teamSocket.onclose = (): void => {
-            // The socket is set to undefined in the close button listener
-            // If it's not undefined, the socket was closed by other means, so show an error message
-            if (teamSocket) {
-                $("#splash-server-message-text").html(
-                    joinedTeam
-                        ? "Lost connection to team."
-                        : "Error joining team.<br>It may not exist or it is full."
                 );
-                $("#splash-server-message").show();
-            }
-            resetPlayButtons();
-            teamSocket = undefined;
-            teamID = undefined;
-            joinedTeam = false;
-            window.location.hash = "";
-            createTeamMenu.fadeOut(250);
-        };
+                _teammateDataCache.set(id, ele);
 
-        createTeamMenu.fadeIn(250);
-    });
-
-    $("#close-create-team").on("click", () => {
-        const socket = teamSocket;
-        teamSocket = undefined;
-        socket?.close();
-    });
-
-    $("#btn-copy-team-url").on("click", () => {
-        const url = $("#create-team-url-field").val();
-        if (!url) {
-            alert("Unable to copy link to clipboard.");
-            return;
-        }
-        void navigator.clipboard
-            .writeText(url as string)
-            .then(() => {
-                alert("Link copied to clipboard.");
-            })
-            .catch(() => {
-                alert("Unable to copy link to clipboard.");
-            });
-    });
-
-    $("#btn-hide-team-url").on("click", () => {
-        const icon = $("#btn-hide-team-url i");
-        const urlField = $("#create-team-url-field");
-        if (urlField.hasClass("hidden")) {
-            icon.removeClass("fa-eye")
-                .addClass("fa-eye-slash");
-            urlField.removeClass("hidden")
-                .css("color", "");
-            return;
-        }
-        icon.removeClass("fa-eye-slash")
-            .addClass("fa-eye");
-        urlField.addClass("hidden")
-            .css("color", "#FFFFFF00");
-    });
-
-    $("#create-team-toggle-auto-fill").on("click", function() {
-        autoFill = $(this).prop("checked");
-        teamSocket?.send(JSON.stringify({
-            type: CustomTeamMessages.Settings,
-            autoFill
-        }));
-    });
-
-    $("#create-team-toggle-lock").on("click", function() {
-        teamSocket?.send(JSON.stringify({
-            type: CustomTeamMessages.Settings,
-            locked: $(this).prop("checked")
-        }));
-    });
-
-    $("#btn-start-game").on("click", () => {
-        teamSocket?.send(JSON.stringify({ type: CustomTeamMessages.Start }));
-    });
-
-    const nameColor = params.get("nameColor");
-    if (nameColor) {
-        game.console.setBuiltInCVar("dv_name_color", nameColor);
-    }
-
-    const lobbyClearing = params.get("lobbyClearing");
-    if (lobbyClearing) {
-        game.console.setBuiltInCVar("dv_lobby_clearing", lobbyClearing === "true");
-    }
-
-    const devPassword = params.get("password");
-    if (devPassword) {
-        game.console.setBuiltInCVar("dv_password", devPassword);
-        location.search = "";
-    }
-
-    const roleParam = params.get("role");
-    if (roleParam) {
-        game.console.setBuiltInCVar("dv_role", roleParam);
-        location.search = "";
-    }
-
-    const usernameField = $("#username-input");
-
-    const youtubers = [
-        {
-            name: "123OP",
-            link: "https://www.youtube.com/@123op."
-        },
-        {
-            name: "TEAMFIGHTER 27",
-            link: "https://www.youtube.com/@TEAMFIGHTER27"
-        },
-        {
-            name: "NAMERIO",
-            link: "https://www.youtube.com/@NAMERIO1"
-        },
-        {
-            name: "AWMZ",
-            link: "https://www.youtube.com/@AWMZfn"
-        },
-        {
-            name: "Ukraines dude",
-            link: "https://www.youtube.com/@Ukrainesdude"
-        },
-        {
-            name: "monet",
-            link: "https://www.youtube.com/@stardust_737"
-        },
-        {
-            name: "Tuncres",
-            link: "https://www.youtube.com/@Tuncres2022"
-        },
-        {
-            name: "silverdotware",
-            link: "https://www.youtube.com/@silverdotware"
-        },
-        {
-            name: "Pablo_Fan_",
-            link: "https://www.youtube.com/@Pablo_Fan_"
-        },
-        {
-            name: "g0dak",
-            link: "https://www.youtube.com/@g0dak"
-        }
-    ];
-    const youtuber = pickRandomInArray(youtubers);
-    $("#youtube-featured-name").text(youtuber.name);
-    $("#youtube-featured-content").attr("href", youtuber.link);
-
-    const streamers = [
-        {
-            name: "ikou",
-            link: "https://www.twitch.tv/ikou_yt"
-        },
-        {
-            name: "seth_mayo",
-            link: "https://www.twitch.tv/seth_mayo"
-        },
-        {
-            name: "PatchesSC",
-            link: "https://www.twitch.tv/patchessc"
-        }
-    ];
-    const streamer = pickRandomInArray(streamers);
-    $("#twitch-featured-name").text(streamer.name);
-    $("#twitch-featured-content").attr("href", streamer.link);
-
-    const toggleRotateMessage = (): JQuery =>
-        $("#splash-rotate-message").toggle(
-            window.innerWidth < window.innerHeight
-        );
-    toggleRotateMessage();
-    $(window).on("resize", toggleRotateMessage);
-
-    const gameMenu = $("#game-menu");
-    const settingsMenu = $("#settings-menu");
-
-    usernameField.val(game.console.getBuiltInCVar("cv_player_name"));
-
-    usernameField.on("input", () => {
-        usernameField.val(
-            (usernameField.val() as string)
-                // Replace fancy quotes & dashes, so they don't get stripped out
-                .replace(/[\u201c\u201d\u201f]/g, '"')
-                .replace(/[\u2018\u2019\u201b]/g, "'")
-                .replace(/[\u2013\u2014]/g, "-")
-                // Strip out non-ASCII chars
-                // eslint-disable-next-line no-control-regex
-                .replace(/[^\x20-\x7E]/g, "")
-        );
-
-        game.console.setBuiltInCVar("cv_player_name", usernameField.val() as string);
-    });
-
-    createDropdown("#server-select");
-
-    const serverSelect = $<HTMLSelectElement>("#server-select");
-
-    // Select region
-    serverSelect.on("change", () => {
-        // const value = serverSelect.val() as string | undefined;
-
-        /*if (value !== undefined) {
-            game.console.setBuiltInCVar("cv_region", value);
-        }*/
-    });
-
-    const rulesBtn = $("#btn-rules");
-
-    // Highlight rules & tutorial button for new players
-    if (!game.console.getBuiltInCVar("cv_rules_acknowledged")) {
-        rulesBtn.removeClass("btn-secondary").addClass("highlighted");
-    }
-
-    // Event listener for rules button
-    rulesBtn.on("click", () => {
-        game.console.setBuiltInCVar("cv_rules_acknowledged", true);
-        location.href = "./rules/";
-    });
-
-    $("#btn-quit-game, #btn-spectate-menu, #btn-menu").on("click", () => {
-        void game.endGame();
-    });
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    $("#btn-play-again, #btn-spectate-replay").on("click", async() => {
-        await game.endGame();
-        if (teamSocket) teamSocket.send(JSON.stringify({ type: CustomTeamMessages.Start })); // TODO Check if player is team leader
-        else joinGame();
-    });
-
-    const sendSpectatePacket = (action: SpectateActions): void => {
-        const packet = new SpectatePacket();
-        packet.spectateAction = action;
-        game.sendPacket(packet);
-    };
-
-    $("#btn-spectate").on("click", () => {
-        sendSpectatePacket(SpectateActions.BeginSpectating);
-        game.spectating = true;
-        game.map.indicator.setFrame("player_indicator");
-    });
-
-    $("#btn-spectate-previous").on("click", () => {
-        sendSpectatePacket(SpectateActions.SpectatePrevious);
-    });
-
-    $("#btn-spectate-kill-leader").on("click", () => {
-        sendSpectatePacket(SpectateActions.SpectateKillLeader);
-    });
-
-    $("#btn-report").on("click", () => {
-        if (confirm(`Are you sure you want to report this player?
-Players should only be reported for teaming or hacking.
-Video evidence is required.`)) {
-            sendSpectatePacket(SpectateActions.Report);
-        }
-    });
-    $("#btn-spectate-next").on("click", () => {
-        sendSpectatePacket(SpectateActions.SpectateNext);
-    });
-
-    $("#btn-resume-game").on("click", () => gameMenu.hide());
-    $("#btn-fullscreen").on("click", () => {
-        requestFullscreen();
-        $("#game-menu").hide();
-    });
-
-    body.on("keydown", (e: JQuery.KeyDownEvent) => {
-        if (e.key === "Escape") {
-            if ($("canvas").hasClass("active") && !game.console.isOpen) {
-                gameMenu.fadeToggle(250);
-                settingsMenu.hide();
-            }
-            game.console.isOpen = false;
-        }
-    });
-
-    $("#btn-settings").on("click", () => {
-        $(".dialog").hide();
-        settingsMenu.fadeToggle(250);
-        settingsMenu.removeClass("in-game");
-    });
-
-    $("#btn-settings-game").on("click", () => {
-        gameMenu.hide();
-        settingsMenu.fadeToggle(250);
-        settingsMenu.addClass("in-game");
-    });
-
-    $("#close-settings").on("click", () => {
-        settingsMenu.fadeOut(250);
-    });
-
-    const customizeMenu = $("#customize-menu");
-    $("#btn-customize").on("click", () => {
-        $(".dialog").hide();
-        customizeMenu.fadeToggle(250);
-    });
-    $("#close-customize").on("click", () => customizeMenu.fadeOut(250));
-
-    $("#close-report").on("click", () => $("#report-modal").fadeOut(250));
-
-    const role = game.console.getBuiltInCVar("dv_role");
-
-    // Load skins
-    if (!Skins.definitions.some(s => s.idString === game.console.getBuiltInCVar("cv_loadout_skin"))) {
-        game.console.setBuiltInCVar("cv_loadout_skin", defaultClientCVars.cv_loadout_skin as string);
-    }
-
-    const updateSplashCustomize = (skinID: string): void => {
-        $("#skin-base").css(
-            "background-image",
-            `url("./img/game/skins/${skinID}_base.svg")`
-        );
-        $("#skin-left-fist, #skin-right-fist").css(
-            "background-image",
-            `url("./img/game/skins/${skinID}_fist.svg")`
-        );
-    };
-    updateSplashCustomize(game.console.getBuiltInCVar("cv_loadout_skin"));
-    for (const skin of Skins) {
-        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-        if (skin.hideFromLoadout || (skin.roleRequired ?? role) !== role) continue;
-
-        /* eslint-disable @typescript-eslint/restrict-template-expressions */
-        // noinspection CssUnknownTarget
-        const skinItem =
-            $(`<div id="skin-${skin.idString}" class="skins-list-item-container">
-  <div class="skin">
-    <div class="skin-base" style="background-image: url('./img/game/skins/${skin.idString}_base.svg')"></div>
-    <div class="skin-left-fist" style="background-image: url('./img/game/skins/${skin.idString}_fist.svg')"></div>
-    <div class="skin-right-fist" style="background-image: url('./img/game/skins/${skin.idString}_fist.svg')"></div>
-  </div>
-  <span class="skin-name">${skin.name}</span>
-</div>`);
-        skinItem.on("click", function() {
-            game.console.setBuiltInCVar("cv_loadout_skin", skin.idString);
-            $(this).addClass("selected").siblings().removeClass("selected");
-            updateSplashCustomize(skin.idString);
-        });
-        $("#skins-list").append(skinItem);
-    }
-    $(`#skin-${game.console.getBuiltInCVar("cv_loadout_skin")}`).addClass("selected");
-
-    // Load emotes
-    let selectedEmoteSlot: typeof emoteSlots[number] | undefined;
-    function updateEmotesList(): void {
-        const emoteList = $("#emotes-list");
-
-        emoteList.empty();
-
-        for (const emote of [{ idString: "", name: "None" }, ...Emotes.definitions]) {
-            if (emote.isTeamEmote) continue;
-
-            // noinspection CssUnknownTarget
-            const emoteItem =
-                $(`<div id="emote-${emote.idString}" class="emotes-list-item-container">
-    ${emote.idString !== "" ? `<div class="emotes-list-item" style="background-image: url('./img/game/emotes/${emote.idString}.svg')"></div>` : ""}
-    <span class="emote-name">${emote.name}</span>
-    </div>`);
-
-            emoteItem.on("click", function() {
-                if (selectedEmoteSlot === undefined) return;
-                game.console.setBuiltInCVar(`cv_loadout_${selectedEmoteSlot}_emote`, emote.idString);
-
-                $(this).addClass("selected").siblings().removeClass("selected");
-
-                $(`#emote-wheel-container .emote-${selectedEmoteSlot}`).css(
-                    "background-image",
-                    emote.idString !== "" ? `url("./img/game/emotes/${emote.idString}.svg")` : "none"
-                );
+                this.ui.teamContainer.append(ele.container);
             });
 
-            emoteList.append(emoteItem);
-        }
-    }
-
-    updateEmotesList();
-    for (const slot of emoteSlots) {
-        const emote = game.console.getBuiltInCVar(`cv_loadout_${slot}_emote`);
-
-        $(`#emote-wheel-container .emote-${slot}`)
-            .css("background-image", emote ? `url("./img/game/emotes/${emote}.svg")` : "none")
-            .on("click", () => {
-                if (selectedEmoteSlot === slot) return;
-
-                $(`#emote-wheel-container .emote-${selectedEmoteSlot}`)
-                    .removeClass("selected");
-                selectedEmoteSlot = slot;
-
-                updateEmotesList();
-
-                if (emoteSlots.indexOf(slot) > 3) {
-                    // win / death emote
-                    $("#emote-customize-wheel").css(
-                        "background-image",
-                        "url('/img/misc/emote_wheel.svg')"
-                    );
-                    $(`#emote-wheel-container .emote-${slot}`).addClass("selected");
-                } else {
-                    $("#emote-customize-wheel").css(
-                        "background-image",
-                        `url("./img/misc/emote_wheel_highlight_${slot}.svg"), url("/img/misc/emote_wheel.svg")`
-                    );
-                }
-
-                $(".emotes-list-item-container")
-                    .removeClass("selected")
-                    .css("cursor", "pointer");
-                $(`#emote-${game.console.getBuiltInCVar(`cv_loadout_${slot}_emote`) || "none"}`).addClass("selected");
-            });
-    }
-
-    // Load crosshairs
-    function loadCrosshair(): void {
-        const size = 20 * game.console.getBuiltInCVar("cv_crosshair_size");
-        const crosshair = getCrosshair(
-            game.console.getBuiltInCVar("cv_loadout_crosshair"),
-            game.console.getBuiltInCVar("cv_crosshair_color"),
-            size,
-            game.console.getBuiltInCVar("cv_crosshair_stroke_color"),
-            game.console.getBuiltInCVar("cv_crosshair_stroke_size")
-        );
-        const cursor = crosshair === "crosshair" ? crosshair : `url("${crosshair}") ${size / 2} ${size / 2}, crosshair`;
-
-        $("#crosshair-image").css({
-            backgroundImage: `url("${crosshair}")`,
-            width: size,
-            height: size
-        });
-
-        $("#crosshair-controls").toggleClass("disabled", !Crosshairs[game.console.getBuiltInCVar("cv_loadout_crosshair")]);
-
-        $("#crosshair-preview, #game").css({ cursor });
-    }
-    loadCrosshair();
-
-    game.console.variables.addChangeListener(
-        "cv_loadout_crosshair",
-        (game, value) => {
-            $(`#crosshair-${value}`).addClass("selected").siblings().removeClass("selected");
-            loadCrosshair();
-        }
-    );
-
-    Crosshairs.forEach((_, crosshairIndex) => {
-        const crosshairItem = $(`
-    <div id="crosshair-${crosshairIndex}" class="crosshairs-list-item-container">
-        <div class="crosshairs-list-item"></div>
-    </div>`);
-
-        crosshairItem.find(".crosshairs-list-item").css({
-            backgroundImage: `url("${getCrosshair(
-                crosshairIndex,
-                "#fff",
-                game.console.getBuiltInCVar("cv_crosshair_size"),
-                "#0",
-                0
-            )}")`,
-            "background-size": "contain",
-            "background-repeat": "no-repeat"
-        });
-
-        crosshairItem.on("click", function() {
-            game.console.setBuiltInCVar("cv_loadout_crosshair", crosshairIndex);
-            loadCrosshair();
-            $(this).addClass("selected").siblings().removeClass("selected");
-        });
-
-        $("#crosshairs-list").append(crosshairItem);
-    });
-
-    $(`#crosshair-${game.console.getBuiltInCVar("cv_loadout_crosshair")}`).addClass("selected");
-
-    // Load special tab
-    if (game.console.getBuiltInCVar("dv_role") !== "") {
-        $("#tab-special").show();
-        $<HTMLInputElement>("#role-name")
-            .val(game.console.getBuiltInCVar("dv_role"))
-            .on("input", (e) => {
-                game.console.setBuiltInCVar("dv_role", e.target.value);
-            });
-        $<HTMLInputElement>("#role-password").on("input", (e) => {
-            game.console.setBuiltInCVar("dv_password", e.target.value);
-        });
-        addCheckboxListener("#toggle-lobbyclearing", "dv_lobby_clearing");
-        if (game.console.getBuiltInCVar("dv_name_color") === "") game.console.setBuiltInCVar("dv_name_color", "#FFFFFF");
-        $<HTMLInputElement>("#namecolor-color-picker")
-            .val(game.console.getBuiltInCVar("dv_name_color"))
-            .on("input", (e) => {
-                game.console.setBuiltInCVar("dv_name_color", e.target.value);
-            });
-        $<HTMLInputElement>("#weapon-preset")
-            .val(game.console.getBuiltInCVar("dv_weapon_preset"))
-            .on("input", (e) => {
-                game.console.setBuiltInCVar("dv_weapon_preset", e.target.value);
-            });
-    }
-
-    // Load badges
-    const allowedBadges = Badges.definitions.filter(badge => badge.roles.length === 0 || badge.roles.includes(role));
-
-    if (allowedBadges.length > 0) {
-        $("#tab-badges").show();
-
-        // ???
-        /* eslint-disable @typescript-eslint/quotes, quotes */
-        const noBadgeItem = $(
-            `<div id="badge-" class="badges-list-item-container">\
-            <div class="badges-list-item"> </div>\
-            <span class="badge-name">None</span>\
-            </div>`
-        );
-
-        noBadgeItem.on("click", function() {
-            game.console.setBuiltInCVar("cv_loadout_badge", "");
-            $(this).addClass("selected").siblings().removeClass("selected");
-        });
-
-        $("#badges-list").append(noBadgeItem);
-        for (const badge of allowedBadges) {
-            // noinspection CssUnknownTarget
-            const badgeItem = $(
-                `<div id="badge-${badge.idString}" class="badges-list-item-container">\
-                <div class="badges-list-item">\
-                    <div style="background-image: url('./img/game/badges/${badge.idString}.svg')"></div>\
-                </div>\
-                <span class="badge-name">${badge.name}</span>\
-                </div>`
-            );
-
-            badgeItem.on("click", function() {
-                game.console.setBuiltInCVar("cv_loadout_badge", badge.idString);
-                $(this).addClass("selected").siblings().removeClass("selected");
-            });
-
-            $("#badges-list").append(badgeItem);
-        }
-
-        $(`#badge-${game.console.getBuiltInCVar("cv_loadout_badge")}`).addClass("selected");
-    }
-
-    function addSliderListener(
-        elementId: string,
-        settingName: keyof CVarTypeMapping,
-        callback?: (value: number) => void
-    ): void {
-        const element = ($<HTMLInputElement>(elementId))[0];
-        if (!element) console.error("Invalid element id");
-
-        element.addEventListener("input", () => {
-            const value = +element.value;
-            game.console.setBuiltInCVar(settingName, value);
-            callback?.(value);
-        });
-
-        game.console.variables.addChangeListener(settingName, (game, newValue) => {
-            const casted = +newValue;
-
-            callback?.(casted);
-            element.value = `${casted}`;
-            element.dispatchEvent(new InputEvent("input"));
-        });
-
-        element.value = (game.console.getBuiltInCVar(settingName) as number).toString();
-    }
-
-    function addCheckboxListener(
-        elementId: string,
-        settingName: keyof CVarTypeMapping,
-        callback?: (value: boolean) => void
-    ): void {
-        const element = ($<HTMLInputElement>(elementId))[0];
-        if (!element) console.error("Invalid element id");
-
-        element.addEventListener("input", () => {
-            const value = element.checked;
-            game.console.setBuiltInCVar(settingName, value);
-            callback?.(value);
-        });
-
-        game.console.variables.addChangeListener(settingName, (game, newValue) => {
-            const casted = !!newValue;
-
-            callback?.(casted);
-            element.checked = casted;
-        });
-
-        element.checked = game.console.getBuiltInCVar(settingName) as boolean;
-    }
-
-    addSliderListener(
-        "#slider-crosshair-size",
-        "cv_crosshair_size",
-        loadCrosshair
-    );
-    addSliderListener(
-        "#slider-crosshair-stroke-size",
-        "cv_crosshair_stroke_size",
-        loadCrosshair
-    );
-
-    const crosshairColor = $<HTMLInputElement>("#crosshair-color-picker");
-
-    crosshairColor.on("input", () => {
-        game.console.setBuiltInCVar("cv_crosshair_color", crosshairColor.val()!);
-        loadCrosshair();
-    });
-
-    game.console.variables.addChangeListener(
-        "cv_crosshair_color",
-        (game, value) => {
-            crosshairColor.val(value);
-        }
-    );
-
-    const crosshairStrokeColor = $<HTMLInputElement>("#crosshair-stroke-picker");
-
-    crosshairStrokeColor.on("input", () => {
-        game.console.setBuiltInCVar("cv_crosshair_stroke_color", crosshairStrokeColor.val()!);
-        loadCrosshair();
-    });
-
-    game.console.variables.addChangeListener(
-        "cv_crosshair_stroke_color",
-        (game, value) => {
-            crosshairStrokeColor.val(value);
-        }
-    );
-
-    // Disable context menu
-    $("#game").on("contextmenu", e => { e.preventDefault(); });
-
-    // Scope looping toggle
-    addCheckboxListener(
-        "#toggle-scope-looping",
-        "cv_loop_scope_selection"
-    );
-
-    // Toggle auto pickup
-    addCheckboxListener(
-        "#toggle-auto-pickup",
-        "cv_auto_pickup"
-    );
-
-    // Anonymous player names toggle
-    addCheckboxListener(
-        "#toggle-anonymous-player",
-        "cv_anonymize_player_names"
-    );
-
-    addCheckboxListener("#toggle-hide-emote", "cv_hide_emotes");
-
-    // Music volume
-    addSliderListener(
-        "#slider-music-volume",
-        "cv_music_volume",
-        value => {
-            game.music.volume = value;
-        }
-    );
-
-    // SFX volume
-    addSliderListener(
-        "#slider-sfx-volume",
-        "cv_sfx_volume",
-        value => {
-            game.soundManager.volume = value;
-        }
-    );
-
-    // Master volume
-    addSliderListener(
-        "#slider-master-volume",
-        "cv_master_volume",
-        value => {
-            sound.volumeAll = value;
-        }
-    );
-
-    // Old menu music
-    addCheckboxListener("#toggle-old-music", "cv_use_old_menu_music");
-
-    // Camera shake
-    addCheckboxListener("#toggle-camera-shake", "cv_camera_shake_fx");
-
-    // FPS, ping, and coordinates toggles
-    for (const prop of ["fps", "ping", "pos"] as const) {
-        const debugReadout = game.uiManager.debugReadouts[prop];
-
-        debugReadout.toggle(game.console.getBuiltInCVar(`pf_show_${prop}`));
-
-        addCheckboxListener(
-            `#toggle-${prop}`,
-            `pf_show_${prop}`,
-            value => debugReadout.toggle(value)
-        );
-    }
-
-    // lmao one day, we'll have dropdown menus
-
-    // Text killfeed toggle
-    {
-        const element = $<HTMLInputElement>("#toggle-text-kill-feed")[0];
-
-        element.addEventListener("input", () => {
-            game.console.setBuiltInCVar("cv_killfeed_style", element.checked ? "text" : "icon");
-        });
-
-        game.console.variables.addChangeListener("cv_killfeed_style", (game, value) => {
-            element.checked = value === "text";
-            game.uiManager.updateWeaponSlots();
-        });
-
-        element.checked = game.console.getBuiltInCVar("cv_killfeed_style") === "text";
-    }
-
-    // Weapon slot style toggle
-    {
-        const element = $<HTMLInputElement>("#toggle-colored-slots")[0];
-
-        element.addEventListener("input", () => {
-            game.console.setBuiltInCVar("cv_weapon_slot_style", element.checked ? "colored" : "simple");
-            game.uiManager.updateWeaponSlots();
-        });
-
-        game.console.variables.addChangeListener("cv_weapon_slot_style", (game, value) => {
-            console.trace();
-            element.checked = value === "colored";
-            game.uiManager.updateWeaponSlots();
-        });
-
-        element.checked = game.console.getBuiltInCVar("cv_weapon_slot_style") === "colored";
-    }
-
-    // render mode select menu
-    const renderSelect = $<HTMLSelectElement>("#render-mode-select")[0];
-    renderSelect.addEventListener("input", () => {
-        game.console.setBuiltInCVar("cv_renderer", renderSelect.value as unknown as "webgl1" | "webgl2" | "webgpu");
-    });
-    renderSelect.value = game.console.getBuiltInCVar("cv_renderer");
-
-    void (async() => {
-        $("#webgpu-option").toggle(await isWebGPUSupported());
-    })();
-
-    // render resolution select menu
-    const renderResSelect = $<HTMLSelectElement>("#render-res-select")[0];
-    renderResSelect.addEventListener("input", () => {
-        game.console.setBuiltInCVar("cv_renderer_res", renderResSelect.value as unknown as "auto" | "0.5" | "1" | "2" | "3");
-    });
-    renderResSelect.value = game.console.getBuiltInCVar("cv_renderer_res");
-
-    // High resolution toggle
-    $("#toggle-high-res").parent().parent().toggle(!game.inputManager.isMobile);
-    addCheckboxListener("#toggle-high-res", "cv_high_res_textures");
-
-    // Anti-aliasing toggle
-    addCheckboxListener("#toggle-antialias", "cv_antialias");
-
-    // Movement smoothing toggle
-    addCheckboxListener("#toggle-movement-smoothing", "cv_movement_smoothing");
-
-    // Responsive rotation toggle
-    addCheckboxListener("#toggle-responsive-rotation", "cv_responsive_rotation");
-
-    // Mobile controls stuff
-    addCheckboxListener("#toggle-mobile-controls", "mb_controls_enabled");
-    addSliderListener("#slider-joystick-size", "mb_joystick_size");
-    addSliderListener("#slider-joystick-transparency", "mb_joystick_transparency");
-    addCheckboxListener("#toggle-high-res-mobile", "mb_high_res_textures");
-
-    const gameUi = $("#game-ui");
-    function updateUiScale(): void {
-        const scale = game.console.getBuiltInCVar("cv_ui_scale");
-
-        gameUi.width(window.innerWidth / scale);
-        gameUi.height(window.innerHeight / scale);
-        gameUi.css("transform", `scale(${scale})`);
-    }
-    updateUiScale();
-    window.addEventListener("resize", () => updateUiScale());
-
-    addSliderListener(
-        "#slider-ui-scale",
-        "cv_ui_scale",
-        () => {
-            updateUiScale();
-            game.map.resize();
-        }
-    );
-
-    // TODO: fix joysticks on mobile when UI scale is not 1
-    if (game.inputManager.isMobile) {
-        $("#ui-scale-container").hide();
-        game.console.setBuiltInCVar("cv_ui_scale", 1);
-    }
-
-    // Minimap stuff
-    addSliderListener(
-        "#slider-minimap-transparency",
-        "cv_minimap_transparency",
-        () => {
-            game.map.updateTransparency();
-        }
-    );
-    addSliderListener(
-        "#slider-big-map-transparency",
-        "cv_map_transparency",
-        () => {
-            game.map.updateTransparency();
-        }
-    );
-    addCheckboxListener(
-        "#toggle-hide-minimap",
-        "cv_minimap_minimized",
-        value => {
-            //HACK minimap code is hacky and it scares me too much
-            //HACK for me to add a "setVisible" method or smth
-            let iterationCount = 0;
-            while (game.map.visible === value && ++iterationCount < 100) {
-                game.map.toggleMinimap();
+            for (const outdated of notVisited) {
+                _teammateDataCache.get(outdated)!.destroy();
+                _teammateDataCache.delete(outdated);
             }
         }
-    );
 
-    // Leave warning
-    addCheckboxListener("#toggle-leave-warning", "cv_leave_warning");
+        if (data.zoom) this.game.camera.zoom = data.zoom;
 
-    const splashUi = $<HTMLInputElement>("#splash-ui");
-    // Blur splash screen
-    addCheckboxListener(
-        "#toggle-blur-splash",
-        "cv_blur_splash",
-        value => {
-            splashUi.toggleClass("blur", value);
-        }
-    );
-    splashUi.toggleClass("blur", game.console.getBuiltInCVar("cv_blur_splash"));
+        if (data.dirty.maxMinStats) {
+            this.maxHealth = data.maxHealth;
+            this.minAdrenaline = data.minAdrenaline;
+            this.maxAdrenaline = data.maxAdrenaline;
 
-    const button = $<HTMLButtonElement>("#btn-rules, #rules-close-btn");
-    // Hide rules button
-    addCheckboxListener(
-        "#toggle-hide-rules",
-        "cv_hide_rules_button",
-        value => {
-            button.toggle(!value);
-        }
-    );
-    button.toggle(!game.console.getBuiltInCVar("cv_hide_rules_button"));
-
-    // Hide option to hide rules if rules haven't been acknowledged
-    $(".checkbox-setting").has("#toggle-hide-rules").toggle(game.console.getBuiltInCVar("cv_rules_acknowledged"));
-
-    $("#rules-close-btn").on("click", () => {
-        $("#btn-rules, #rules-close-btn").hide();
-        game.console.setBuiltInCVar("cv_hide_rules_button", true);
-        $("#toggle-hide-rules").prop("checked", true);
-    }).toggle(game.console.getBuiltInCVar("cv_rules_acknowledged") && !game.console.getBuiltInCVar("cv_hide_rules_button"));
-
-    // Import settings
-    $("#import-settings-btn").on("click", () => {
-        if (!confirm("This option will overwrite all settings and reload the page. Continue?")) return;
-        const error = (): void => {
-            alert("Invalid config.");
-        };
-        try {
-            const input = prompt("Enter a config:");
-            if (!input) {
-                error();
-                return;
-            }
-
-            const config = JSON.parse(input);
-            if (typeof config !== "object" || !("variables" in config)) {
-                error();
-                return;
-            }
-
-            localStorage.setItem("suroi_config", input);
-            alert("Settings loaded successfully.");
-            window.location.reload();
-        } catch (e) {
-            error();
-        }
-    });
-
-    // Copy settings to clipboard
-    $("#export-settings-btn").on("click", () => {
-        const exportedSettings = localStorage.getItem("suroi_config");
-        const error = (): void => {
-            alert('Unable to copy settings. To export settings manually, open the dev tools with Ctrl+Shift+I and type in the following: localStorage.getItem("suroi_config")');
-        };
-        if (exportedSettings === null) {
-            error();
-            return;
-        }
-        navigator.clipboard
-            .writeText(exportedSettings)
-            .then(() => {
-                alert("Settings copied to clipboard.");
-            })
-            .catch(error);
-    });
-
-    // Reset settings
-    $("#reset-settings-btn").on("click", () => {
-        if (!confirm("This option will reset all settings and reload the page. Continue?")) return;
-        if (!confirm("Are you sure? This action cannot be undone.")) return;
-        localStorage.removeItem("suroi_config");
-        window.location.reload();
-    });
-
-    // Switch weapon slots by clicking
-    const maxWeapons = GameConstants.player.maxWeapons;
-    for (let slot = 0; slot < maxWeapons; slot++) {
-        const slotElement = $(`#weapon-slot-${slot + 1}`);
-        slotElement[0].addEventListener("pointerdown", (e: PointerEvent): void => {
-            if (slotElement.hasClass("has-item")) {
-                e.stopImmediatePropagation();
-                if (slot === 3) { // Check if the slot is 4 (0-indexed)
-                    const step = 1; // Define the step for cycling
-                    if (game.activePlayer?.activeItem.itemType === ItemType.Throwable) game.inputManager.cycleThrowable(step);
-                }
-                game.inputManager.addAction({
-                    type: e.button === 2 ? InputActions.DropWeapon : InputActions.EquipItem,
-                    slot
-                });
-            }
-        });
-    }
-
-    const slotListener = (idString: string, listener: (button: number) => void): void => {
-        $(`#${idString}-slot`)[0].addEventListener("pointerdown", (e: PointerEvent): void => {
-            listener(e.button);
-            e.stopPropagation();
-        });
-    };
-
-    // Generate the UI for scopes, healing items and ammos
-    for (const scope of Scopes) {
-        $("#scopes-container").append(`
-        <div class="inventory-slot item-slot" id="${scope.idString}-slot" style="display: none;">
-            <img class="item-image" src="./img/game/loot/${scope.idString}.svg" draggable="false">
-            <div class="item-tooltip">${scope.name.split(" ")[0]}</div>
-        </div>`);
-
-        slotListener(scope.idString, (button: number): void => {
-            if (button === 0) {
-                game.inputManager.addAction({
-                    type: InputActions.UseItem,
-                    item: scope
-                });
-            } else if (button === 2 && game.teamMode) {
-                game.inputManager.addAction({
-                    type: InputActions.DropItem,
-                    item: scope
-                });
-            }
-        });
-
-        if (UI_DEBUG_MODE) {
-            $(`#${scope.idString}-slot`).show();
-        }
-    }
-
-    for (const item of HealingItems) {
-        $("#healing-items-container").append(`
-        <div class="inventory-slot item-slot" id="${item.idString}-slot">
-            <img class="item-image" src="./img/game/loot/${item.idString}.svg" draggable="false">
-            <span class="item-count" id="${item.idString}-count">0</span>
-            <div class="item-tooltip">
-                ${item.name}
-                <br>
-                Restores ${item.restoreAmount}${item.healType === HealType.Adrenaline ? "% adrenaline" : " health"}
-            </div>
-        </div>`);
-
-        slotListener(item.idString, (button: number) => {
-            if (button === 0) {
-                if (game.inputManager.pingWheelActive) {
-                    game.inputManager.addAction({
-                        type: InputActions.Emote,
-                        emote: Emotes.fromString(item.idString)
-                    });
-                } else {
-                    game.inputManager.addAction({
-                        type: InputActions.UseItem,
-                        item
-                    });
-                }
-            } else if (button === 2 && game.teamMode) {
-                game.inputManager.addAction({
-                    type: InputActions.DropItem,
-                    item
-                });
-            }
-        });
-    }
-
-    for (const ammo of Ammos) {
-        if (ammo.ephemeral) continue;
-
-        $(`#${ammo.hideUnlessPresent ? "special-" : ""}ammo-container`).append(`
-        <div class="inventory-slot item-slot ammo-slot" id="${ammo.idString}-slot">
-            <img class="item-image" src="./img/game/loot/${ammo.idString}.svg" draggable="false">
-            <span class="item-count" id="${ammo.idString}-count">0</span>
-        </div>`);
-
-        slotListener(ammo.idString, (button: number) => {
-            if (button === 0 && game.inputManager.pingWheelActive) {
-                game.inputManager.addAction({
-                    type: InputActions.Emote,
-                    emote: Emotes.fromString(ammo.idString)
-                });
-            } else if (button === 2 && game.teamMode) {
-                game.inputManager.addAction({
-                    type: InputActions.DropItem,
-                    item: ammo
-                });
-            }
-        });
-    }
-
-    for (const armor of ["helmet", "vest"] as const) {
-        slotListener(armor, (button: number): void => {
-            if (button === 2 && game.activePlayer && game.teamMode) {
-                game.inputManager.addAction({
-                    type: InputActions.DropItem,
-                    item: game.activePlayer.getEquipment(armor)
-                });
-            }
-        });
-    }
-
-    // Hide mobile settings on desktop
-    $("#tab-mobile").toggle(isMobile.any);
-
-    // Mobile event listeners
-    if (game.inputManager.isMobile) {
-        // Interact message
-        $("#interact-message").on("click", () => {
-            if (game.uiManager.action.active) {
-                game.inputManager.addAction(InputActions.Cancel);
+            if (this.maxHealth === GameConstants.player.defaultHealth) {
+                this.ui.maxHealth.text("").hide();
             } else {
-                game.inputManager.addAction(InputActions.Interact);
-                game.inputManager.addAction(InputActions.Loot);
+                this.ui.maxHealth.text(safeRound(this.maxHealth)).show();
             }
-        });
-        // noinspection HtmlUnknownTarget
-        $("#interact-key").html('<img src="./img/misc/tap-icon.svg" alt="Tap">');
 
-        // Reload button
-        $("#btn-reload")
-            .show()
-            .on("click", () => {
-                game.console.handleQuery("reload");
-            });
-        // Active weapon ammo button also reloads (surviv muscle memory lol)
-        $("#weapon-clip-ammo").on("click", () => game.console.handleQuery("reload"));
+            if (
+                this.maxAdrenaline === GameConstants.player.maxAdrenaline &&
+                this.minAdrenaline === 0
+            ) {
+                this.ui.minMaxAdren.text("").hide();
+            } else {
+                this.ui.minMaxAdren.text(`${this.minAdrenaline === 0 ? "" : `${safeRound(this.minAdrenaline)}/`}${safeRound(this.maxAdrenaline)}`).show();
+            }
+        }
 
-        // Emote button & wheel
-        $("#emote-wheel")
-            .css("top", "50%")
-            .css("left", "50%");
+        if (data.dirty.health) {
+            this.health = Numeric.remap(data.normalizedHealth, 0, 1, 0, this.maxHealth);
 
-        const createEmoteWheelListener = (slot: string, emoteSlot: number): void => {
-            $(`#emote-wheel .emote-${slot}`).on("click", () => {
-                $("#emote-wheel").hide();
+            const normalizedHealth = this.health / this.maxHealth;
+            const realPercentage = 100 * normalizedHealth;
+            const percentage = safeRound(realPercentage);
 
-                if (game.inputManager.pingWheelActive) {
-                    const ping = game.uiManager.mapPings[emoteSlot];
-                    if (ping) {
-                        game.inputManager.addAction({
-                            type: InputActions.MapPing,
-                            ping,
-                            position: game.activePlayer?.position ?? Vec.create(0, 0)
-                        });
-                    }
-                } else {
-                    const emote = game.uiManager.emotes[emoteSlot];
-                    if (emote) {
-                        game.inputManager.addAction({
-                            type: InputActions.Emote,
-                            emote
-                        });
-                    }
-                }
-            });
-        };
-        createEmoteWheelListener("top", 0);
-        createEmoteWheelListener("right", 1);
-        createEmoteWheelListener("bottom", 2);
-        createEmoteWheelListener("left", 3);
+            this.ui.healthBar
+                .width(`${realPercentage}%`)
+                .css("background-color", UIManager.getHealthColor(normalizedHealth, this.game.activePlayer?.downed))
+                .toggleClass("flashing", percentage <= 25);
 
-        $("#btn-game-menu")
-            .show()
-            .on("click", () => {
-                $("#game-menu").toggle();
-            });
+            if (realPercentage === 0) {
+                this.ui.healthAnim
+                    .stop()
+                    .width(0);
+            } else if (Date.now() - this.lastHealthBarAnimTime > 500) {
+                this.ui.healthAnim
+                    .stop()
+                    .width(`${this.oldHealth}%`)
+                    .animate({ width: `${realPercentage}%` }, 500);
+                this.oldHealth = realPercentage;
+                this.lastHealthBarAnimTime = Date.now();
+            }
 
-        $("#btn-emotes")
-            .show()
-            .on("click", () => {
-                $("#emote-wheel").show();
-            });
+            this.ui.healthBarAmount
+                .text(safeRound(this.health))
+                .css("color", percentage <= 40 || this.game.activePlayer?.downed ? "#ffffff" : "#000000");
+        }
 
-        $("#btn-toggle-ping")
-            .show()
-            .on("click", function() {
-                game.inputManager.pingWheelActive = !game.inputManager.pingWheelActive;
-                const { pingWheelActive } = game.inputManager;
-                $(this)
-                    .removeClass(pingWheelActive ? "btn-primary" : "btn-danger")
-                    .addClass(pingWheelActive ? "btn-danger" : "btn-primary");
-                game.uiManager.updateEmoteWheel();
-            });
+        if (data.dirty.adrenaline) {
+            this.adrenaline = Numeric.remap(data.normalizedAdrenaline, 0, 1, this.minAdrenaline, this.maxAdrenaline);
+            const percentage = 100 * this.adrenaline / this.maxAdrenaline;
+
+            this.ui.adrenalineBar.width(`${percentage}%`);
+
+            this.ui.adrenalineBarPercentage
+                .text(safeRound(this.adrenaline))
+                .css("color", this.adrenaline < 7 ? "#ffffff" : "#000000");
+        }
+
+        const inventory = data.inventory;
+
+        if (inventory.weapons) {
+            this.inventory.weapons = inventory.weapons;
+            this.inventory.activeWeaponIndex = inventory.activeWeaponIndex;
+        }
+
+        if (inventory.items) {
+            this.inventory.items = inventory.items;
+            this.inventory.scope = inventory.scope;
+            this.updateItems();
+        }
+        // idiot
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+        if (inventory.weapons || inventory.items) {
+            this.updateWeapons();
+        }
     }
 
-    // Prompt when trying to close the tab while playing
-    window.addEventListener("beforeunload", (e: Event) => {
-        if ($("canvas").hasClass("active") && game.console.getBuiltInCVar("cv_leave_warning") && !game.gameOver) {
-            e.preventDefault();
+    skinID?: string;
+
+    updateWeapons(): void {
+        const inventory = this.inventory;
+        const activeIndex = inventory.activeWeaponIndex;
+        const activeWeapon = inventory.weapons[activeIndex];
+        const count = activeWeapon?.count;
+
+        if (activeWeapon === undefined || count === undefined || UI_DEBUG_MODE) {
+            this.ui.ammoCounterContainer.hide();
+        } else {
+            this.ui.ammoCounterContainer.show();
+
+            this.ui.activeAmmo
+                .text(count)
+                .css("color", count > 0 ? "inherit" : "red");
+
+            let showReserve = false;
+            if (activeWeapon.definition.itemType === ItemType.Gun) {
+                const ammoType = activeWeapon.definition.ammoType;
+                let totalAmmo: number | string = this.inventory.items[ammoType];
+
+                for (const ammo of Ammos) {
+                    if (ammo.idString === ammoType && ammo.ephemeral) {
+                        totalAmmo = "∞";
+                        break;
+                    }
+                }
+
+                showReserve = totalAmmo !== 0;
+
+                this.ui.reserveAmmo
+                    .show()
+                    .text(totalAmmo);
+            }
+
+            this.ui.ammoCounterContainer.toggleClass("has-reserve", showReserve);
+            if (!showReserve) {
+                this.ui.reserveAmmo.hide();
+            }
+        }
+
+        if (activeWeapon?.stats?.kills === undefined) { // killstreaks
+            this.ui.killStreakIndicator.hide();
+        } else {
+            this.ui.killStreakIndicator.show();
+            this.ui.killStreakCounter.text(`Streak: ${activeWeapon.stats.kills}`);
+        }
+
+        this.updateWeaponSlots();
+    }
+
+    updateWeaponSlots(): void {
+        const inventory = this.inventory;
+
+        this.ui.weaponsContainer.children(".inventory-slot").removeClass("active").css("outline-color", "");
+        const max = GameConstants.player.maxWeapons;
+        for (let i = 0; i < max; i++) {
+            const container = $(`#weapon-slot-${i + 1}`);
+            const weapon = inventory.weapons[i];
+            const isActive = this.inventory.activeWeaponIndex === i;
+
+            if (weapon) {
+                const isGun = "ammoType" in weapon.definition;
+                const color = isGun
+                    ? Ammos.fromString((weapon.definition as GunDefinition).ammoType).characteristicColor
+                    : { hue: 0, saturation: 0, lightness: 0 };
+
+                container
+                    .addClass("has-item")
+                    .toggleClass("active", isActive)
+                    .css(isGun && this.game.console.getBuiltInCVar("cv_weapon_slot_style") === "colored"
+                        ? {
+                            "outline-color": `hsl(${color.hue}, ${color.saturation}%, ${(color.lightness + 50) / 3}%)`,
+                            "background-color": `hsla(${color.hue}, ${color.saturation}%, ${color.lightness / 2}%, 50%)`,
+                            color: `hsla(${color.hue}, ${color.saturation}%, 90%)`
+                        }
+                        : {
+                            "outline-color": "",
+                            "background-color": "",
+                            color: ""
+                        })
+                    .children(".item-name")
+                    .text(weapon.definition.name);
+
+                const isFists = weapon.definition.idString === "fists";
+
+                // -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                // Disguises: Fist display fix.
+                // -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                const skinID = this.skinID ?? this.game.console.getBuiltInCVar("cv_loadout_skin");
+                container
+                    .children(".item-image")
+                    .css("background-image", isFists ? `url(./img/game/skins/${Loots.fromString<SkinDefinition>(skinID).isDisguise ? "hazel_jumpsuit" : skinID}_fist.svg)` : "none")
+                    .toggleClass("is-fists", isFists)
+                    .attr("src", `./img/game/weapons/${weapon.definition.idString}.svg`)
+                    .show();
+                // -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+                if (weapon.definition.idString === "ghillie_suit") {
+                    container
+                        .children(".item-image")
+                        .css("background-color", GHILLIE_TINT.toHex());
+                }
+
+                if (weapon.count !== undefined) {
+                    container
+                        .children(".item-ammo")
+                        .text(weapon.count)
+                        .css("color", weapon.count > 0 ? "inherit" : "red");
+                }
+            } else {
+                container.removeClass("has-item").css("background-color", "");
+                container.children(".item-name").css("color", "").text("");
+                container.children(".item-image").removeAttr("src").hide();
+                container.children(".item-ammo").text("");
+            }
+        }
+    }
+
+    updateItems(): void {
+        for (const item in this.inventory.items) {
+            const count = this.inventory.items[item];
+
+            const itemDef = Loots.fromString(item);
+
+            $(`#${item}-count`).text(count);
+
+            const itemSlot = $(`#${item}-slot`);
+            if (this.game.activePlayer) {
+                const backpack = this.game.activePlayer.equipment.backpack;
+                itemSlot.toggleClass("full", count >= backpack.maxCapacity[item]);
+            }
+            itemSlot.toggleClass("has-item", count > 0);
+
+            if (itemDef.itemType === ItemType.Ammo && itemDef.hideUnlessPresent) {
+                itemSlot.css("visibility", count > 0 ? "visible" : "hidden");
+            }
+
+            if (itemDef.itemType === ItemType.Scope && !UI_DEBUG_MODE) {
+                itemSlot.toggle(count > 0).removeClass("active");
+            }
+        }
+
+        $(`#${this.inventory.scope.idString}-slot`).addClass("active");
+    }
+
+    private _killMessageTimeoutID?: number;
+
+    private readonly _killMessageUICache: {
+        header?: JQuery<HTMLDivElement>
+        killCounter?: JQuery<HTMLDivElement>
+        severity?: JQuery<HTMLSpanElement>
+        streak?: JQuery<HTMLSpanElement>
+        victimName?: JQuery<HTMLSpanElement>
+        weaponUsed?: JQuery<HTMLSpanElement>
+    } = {};
+
+    private _addKillMessage(
+        message: (
+            {
+                readonly severity: KillfeedEventSeverity.Down
+            } | {
+                readonly severity: KillfeedEventSeverity.Kill
+                readonly kills: number
+                readonly streak?: number
+            }
+        ) & {
+            readonly type: KillfeedEventType
+            readonly victimName: string
+            readonly weaponUsed?: string
+        }
+    ): void {
+        const { severity, victimName, weaponUsed, type } = message;
+
+        let streakText = "";
+        if (severity === KillfeedEventSeverity.Kill) {
+            const { streak, kills } = message;
+            (this._killMessageUICache.header ??= $("#kill-msg-kills")).text(`Kills: ${kills}`);
+            (this._killMessageUICache.killCounter ??= $("#ui-kills")).text(kills);
+            streakText = streak ? ` (streak: ${streak})` : "";
+        }
+
+        const eventText = `You ${UIManager._eventDescriptionMap[type][severity]} `;
+        // some of these yield nonsensical sentences, but those that do are occur if
+        // `type` takes on bogus values like "Gas" or "Airdrop"
+
+        (this._killMessageUICache.severity ??= $("#kill-msg-severity")).text(eventText);
+
+        (this._killMessageUICache.victimName ??= $("#kill-msg-player-name")).html(victimName);
+        (this._killMessageUICache.weaponUsed ??= $("#kill-msg-weapon-used")).text(
+            ` ${weaponUsed !== undefined ? `with ${weaponUsed}` : ""}${streakText}`
+        );
+
+        this.ui.killModal.fadeIn(350, () => {
+            // clear the previous fade out timeout so it won't fade away too
+            // fast if the player makes more than one kill in a short time span
+            clearTimeout(this._killMessageTimeoutID);
+
+            this._killMessageTimeoutID = window.setTimeout(() => {
+                this.ui.killModal.fadeOut(350);
+            }, 3000);
+        });
+    }
+
+    private _addKillFeedMessage(text: string, classes: string[]): void {
+        const killFeedItem = $('<div class="kill-feed-item">');
+
+        killFeedItem.html(text);
+        killFeedItem.addClass(classes);
+
+        this.ui.killFeed.prepend(killFeedItem);
+        if (!UI_DEBUG_MODE) {
+            let iterationCount = 0;
+            while (this.ui.killFeed.children().length > 5) {
+                if (++iterationCount === 1e3) {
+                    console.warn("1000 iterations of removing killfeed entries; possible infinite loop");
+                }
+
+                this.ui.killFeed.children()
+                    .last()
+                    .remove();
+            }
+        }
+
+        setTimeout(
+            () => killFeedItem.fadeOut(1000, killFeedItem.remove.bind(killFeedItem)),
+            7000
+        );
+    }
+
+    private static readonly _eventDescriptionMap: Record<KillfeedEventType, Record<KillfeedEventSeverity, string>> = freezeDeep({
+        [KillfeedEventType.Suicide]: {
+            [KillfeedEventSeverity.Kill]: "committed suicide",
+            [KillfeedEventSeverity.Down]: "knocked themselves out"
+        },
+        [KillfeedEventType.NormalTwoParty]: {
+            [KillfeedEventSeverity.Kill]: "killed",
+            [KillfeedEventSeverity.Down]: "knocked out"
+        },
+        [KillfeedEventType.BleedOut]: {
+            [KillfeedEventSeverity.Kill]: "bled out",
+            [KillfeedEventSeverity.Down]: "bled out non-lethally" // should be impossible
+        },
+        [KillfeedEventType.FinishedOff]: {
+            [KillfeedEventSeverity.Kill]: "finished off",
+            [KillfeedEventSeverity.Down]: "gently finished off" // should be impossible
+        },
+        [KillfeedEventType.FinallyKilled]: {
+            [KillfeedEventSeverity.Kill]: "finally killed",
+            [KillfeedEventSeverity.Down]: "finally knocked out" // should be impossible
+        },
+        [KillfeedEventType.Gas]: {
+            [KillfeedEventSeverity.Kill]: "died to",
+            [KillfeedEventSeverity.Down]: "was knocked out by"
+        },
+        [KillfeedEventType.Airdrop]: {
+            [KillfeedEventSeverity.Kill]: "was fatally crushed",
+            [KillfeedEventSeverity.Down]: "was knocked out"
         }
     });
 
-    // Hack to style range inputs background and add a label with the value :)
-    function updateRangeInput(element: HTMLInputElement): void {
-        const value = +element.value;
-        const max = +element.max;
-        const min = +element.min;
-        const x = ((value - min) / (max - min)) * 100;
-        $(element).css(
-            "--background",
-            `linear-gradient(to right, #ff7500 0%, #ff7500 ${x}%, #f8f9fa ${x}%, #f8f9fa 100%)`
-        );
-        $(element)
-            .siblings(".range-input-value")
-            .text(
-                element.id !== "slider-joystick-size"
-                    ? `${Math.round(value * 100)}%`
-                    : value
-            );
-    }
+    processKillFeedMessage(message: KillFeedMessage): void {
+        const {
+            messageType,
+            victimId,
 
-    $<HTMLInputElement>("input[type=range]")
-        .on("input", e => {
-            updateRangeInput(e.target);
-        })
-        .each((_i, element) => {
-            updateRangeInput(element);
-        });
+            eventType,
+            severity,
 
-    $(".tab").on("click", (ev) => {
-        const tab = $(ev.target);
+            attackerId,
+            attackerKills,
+            weaponUsed,
+            killstreak,
 
-        tab.siblings().removeClass("active");
+            hideFromKillfeed
+        } = {
+            eventType: KillfeedEventType.Suicide,
+            severity: KillfeedEventSeverity.Kill,
+            ...message
+        };
 
-        tab.addClass("active");
+        const weaponPresent = weaponUsed !== undefined;
+        const isGrenadeImpactKill = weaponPresent && "itemType" in weaponUsed && weaponUsed.itemType === ItemType.Throwable;
 
-        const tabContent = $(`#${ev.target.id}-content`);
+        const getNameAndBadge = (id?: number): { readonly name: string, readonly badgeText: string } => {
+            const hasId = id !== undefined;
+            const badge = hasId ? this.getPlayerBadge(id) : undefined;
 
-        tabContent.siblings().removeClass("active");
-        tabContent.siblings().hide();
+            return {
+                name: hasId ? this.getPlayerName(id) : "",
+                badgeText: badge
+                    ? `<img class="badge-icon" src="./img/game/badges/${badge.idString}.svg" alt="${badge.name} badge">`
+                    : ""
+            };
+        };
 
-        tabContent.addClass("active");
-        tabContent.show();
-    });
+        const {
+            name: victimName,
+            badgeText: victimBadgeText
+        } = getNameAndBadge(victimId);
 
-    $("#warning-modal-agree-checkbox").on("click", function() {
-        $("#warning-btn-play-solo, #btn-play-solo").toggleClass("btn-disabled", !$(this).prop("checked"));
-    });
+        const {
+            name: attackerName,
+            badgeText: attackerBadgeText
+        } = getNameAndBadge(attackerId);
 
-    $("#warning-btn-play-solo").on("click", () => {
-        $("#warning-modal").hide();
-        $("#btn-play-solo").trigger("click");
-    });
+        const victimText = victimName + victimBadgeText;
+        const attackerText = attackerName + attackerBadgeText;
 
-    if (window.location.hash) {
-        teamID = window.location.hash.slice(1);
-        $("#btn-join-team").trigger("click");
+        let messageText: string | undefined;
+        const classes: string[] = [];
+
+        switch (messageType) {
+            case KillfeedMessageType.DeathOrDown: {
+                const hasKillstreak = killstreak! > 1;
+
+                switch (this.game.console.getBuiltInCVar("cv_killfeed_style")) {
+                    case "text": {
+                        let killMessage = "";
+
+                        const description = UIManager._eventDescriptionMap[eventType][severity];
+                        // sod off
+                        // eslint-disable-next-line no-labels
+                        outer:
+                        switch (eventType) {
+                            case KillfeedEventType.FinallyKilled:
+                                switch (attackerId) {
+                                    case undefined:
+                                        // this can happen if the player is knocked out by a non-player entity (like gas or airdrop)
+                                        // if their team is then wiped, then no one "finally" killed them, they just… finally died
+                                        killMessage = `${victimText} finally died`;
+
+                                        // eslint-disable-next-line no-labels
+                                        break outer;
+                                    case victimId:
+                                        /*
+                                            usually, a case where attacker and victim are the same would be counted under the "suicide"
+                                            event type, but there was no easy way to route the event through the "suicide" type whilst
+                                            having it retain the "finally killed" part; this is the best option until someone comes up
+                                            with another
+                                        */
+                                        killMessage = `${victimText} finally ended themselves`;
+
+                                        // eslint-disable-next-line no-labels
+                                        break outer;
+                                }
+                                // fallthrough
+                            case KillfeedEventType.NormalTwoParty:
+                            case KillfeedEventType.FinishedOff:
+                                killMessage = `${attackerText} ${description} ${victimText}`;
+                                break;
+                            case KillfeedEventType.Suicide:
+                            case KillfeedEventType.BleedOut:
+                                killMessage = `${victimText} ${description}`;
+                                break;
+                            case KillfeedEventType.Gas:
+                                killMessage = `${victimText} ${description} the gas`;
+                                break;
+                            case KillfeedEventType.Airdrop:
+                                killMessage = `${victimText} ${description} by an airdrop`;
+                                break;
+                        }
+
+                        const fullyQualifiedName = weaponPresent ? weaponUsed.name : "";
+                        /**
+                         * English being complicated means that this will sometimes return bad results (ex: "hour", "NSA", "one" and "university")
+                         * but to be honest, short of downloading a library off of somewhere, this'll have to do
+                         */
+                        const article = `a${"aeiou".includes(fullyQualifiedName[0]) ? "n" : ""}`;
+                        const weaponNameText = weaponPresent ? ` with ${isGrenadeImpactKill ? `the impact of ${article} ` : ""}${fullyQualifiedName}` : "";
+                        const icon = (() => {
+                            switch (severity) {
+                                case KillfeedEventSeverity.Down:
+                                    return "<img class=\"kill-icon\" src=\"./img/misc/downed.svg\" alt=\"Downed\">";
+                                case KillfeedEventSeverity.Kill:
+                                    return "<img class=\"kill-icon\" src=\"./img/misc/skull_icon.svg\" alt=\"Skull\">";
+                            }
+                        })();
+
+                        messageText = `
+                        ${hasKillstreak && severity === KillfeedEventSeverity.Kill ? killstreak : ""}
+                        ${icon}
+                        ${killMessage}${weaponNameText}`;
+                        break;
+                    }
+                    case "icon": {
+                        const downedIcon = "<img class=\"kill-icon\" src=\"./img/misc/downed.svg\" alt=\"Downed\">";
+                        const skullIcon = "<img class=\"kill-icon\" src=\"./img/misc/skull_icon.svg\" alt=\"Finished off\">";
+                        const bleedOutIcon = "<img class=\"kill-icon\" src=\"./img/misc/bleed_out.svg\" alt=\"Bleed out\">";
+                        const finallyKilledIcon = "<img class=\"kill-icon\" src=\"./img/misc/finally_killed.svg\" alt=\"Finally killed\">";
+
+                        const killstreakText = hasKillstreak
+                            ? `
+                            <span style="font-size: 80%">(${killstreak}
+                                <img class="kill-icon" src="./img/misc/skull_icon.svg" alt="Skull" height=12>)
+                            </span>`
+                            : "";
+
+                        let iconName = "";
+                        switch (eventType) {
+                            case KillfeedEventType.Gas:
+                                iconName = "gas";
+                                break;
+                            case KillfeedEventType.Airdrop:
+                                iconName = "airdrop";
+                                break;
+                            default:
+                                iconName = weaponUsed?.idString ?? "";
+                                break;
+                        }
+                        const altText = weaponUsed ? weaponUsed.name : iconName;
+                        const weaponText = `<img class="kill-icon" src="./img/killfeed/${iconName}_killfeed.svg" alt="${altText}">`;
+
+                        const severityIcon = (() => {
+                            switch (severity) {
+                                case KillfeedEventSeverity.Down:
+                                    return downedIcon;
+                                case KillfeedEventSeverity.Kill:
+                                    return "";
+                            }
+                        })();
+
+                        let body = "";
+                        switch (eventType) {
+                            case KillfeedEventType.FinallyKilled:
+                                switch (attackerId) {
+                                    case undefined:
+                                        body = `${skullIcon} ${victimText}`;
+                                        break;
+                                    case victimId:
+                                        body = `${finallyKilledIcon} ${victimText}`;
+                                        break;
+                                    default:
+                                        body = `${attackerText} ${killstreakText} ${finallyKilledIcon} ${victimText}`;
+                                        break;
+                                }
+                                break;
+                            case KillfeedEventType.NormalTwoParty:
+                                body = `${attackerText} ${killstreakText} ${weaponText} ${victimText}`;
+                                break;
+                            case KillfeedEventType.FinishedOff:
+                                body = `${skullIcon} ${attackerText} ${killstreakText} ${weaponText} ${victimText}`;
+                                break;
+                            case KillfeedEventType.Suicide:
+                            case KillfeedEventType.Gas:
+                            case KillfeedEventType.Airdrop:
+                                body = `${weaponText} ${victimText}`;
+                                break;
+                            case KillfeedEventType.BleedOut:
+                                body = `${bleedOutIcon} ${victimText}`;
+                                break;
+                        }
+
+                        messageText = severityIcon + body;
+                        break;
+                    }
+                }
+
+                /**
+                 * Whether the player pointed to by the given id is on the active player's team
+                 */
+                const playerIsOnThisTeam = (id?: number): boolean | undefined => {
+                    let target: GameObject | undefined;
+
+                    return id === this.game.activePlayerID || (
+                        id !== undefined &&
+                        (target = this.game.objects.get(id)) &&
+                        target instanceof Player &&
+                        target.teamID === this.game.teamID
+                    );
+                };
+
+                switch (true) {
+                    case playerIsOnThisTeam(victimId): {
+                        classes.push("kill-feed-item-victim");
+                        break;
+                    }
+                    case playerIsOnThisTeam(attackerId): {
+                        classes.push("kill-feed-item-killer");
+
+                        if (attackerId === this.game.activePlayerID) {
+                            const base = {
+                                victimName: victimText,
+                                weaponUsed: weaponUsed?.name ?? "",
+                                type: eventType
+                            };
+
+                            this._addKillMessage(
+                                severity === KillfeedEventSeverity.Kill
+                                    ? {
+                                        severity,
+                                        ...base,
+                                        weaponUsed: eventType !== KillfeedEventType.FinallyKilled
+                                            ? base.weaponUsed
+                                            : undefined,
+                                        kills: attackerKills!,
+                                        streak: killstreak
+                                    }
+                                    : {
+                                        severity,
+                                        ...base
+                                    }
+                            );
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+
+            case KillfeedMessageType.KillLeaderAssigned: {
+                if (victimId === this.game.activePlayerID) classes.push("kill-feed-item-killer");
+
+                $("#kill-leader-leader").html(`${victimName}${victimBadgeText}`);
+                $("#kill-leader-kills-counter").text(attackerKills!);
+
+                if (!hideFromKillfeed) {
+                    messageText = `<i class="fa-solid fa-crown"></i> ${victimName}${victimBadgeText} promoted to Kill Leader!`;
+                    this.game.soundManager.play("kill_leader_assigned");
+                }
+                $("#btn-spectate-kill-leader").show();
+                break;
+            }
+
+            case KillfeedMessageType.KillLeaderUpdated: {
+                $("#kill-leader-kills-counter").text(attackerKills!);
+                break;
+            }
+
+            case KillfeedMessageType.KillLeaderDead: {
+                $("#kill-leader-leader").text("Waiting for leader");
+                $("#kill-leader-kills-counter").text("0");
+                // noinspection HtmlUnknownTarget
+                messageText = `<img class="kill-icon" src="./img/misc/skull_icon.svg" alt="Skull"> ${attackerId
+                    ? `${attackerId !== victimId
+                        ? `${attackerName}${attackerBadgeText} killed Kill Leader!`
+                        : "The Kill Leader is dead!"}`
+                    : "The Kill Leader killed themselves!"
+                }`;
+                if (attackerId === this.game.activePlayerID) classes.push("kill-feed-item-killer");
+                else if (victimId === this.game.activePlayerID) classes.push("kill-feed-item-victim");
+                this.game.soundManager.play("kill_leader_dead");
+                $("#btn-spectate-kill-leader").hide();
+                break;
+            }
+        }
+
+        if (messageText) this._addKillFeedMessage(messageText, classes);
     }
 }
 
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣄⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣤⣶⣾⣿⣿⡿⠟⠛⠛⠛⠛⠛⠻⠿⣿⣿⣿⣿⣿⣷⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣤⣶⣿⣿⣿⣿⠟⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⢿⣿⣿⣿⣿⣿⣿⣶⣤⣄⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣠⣶⣿⣿⣿⣿⣿⠟⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⣼⡿⣿⣿⣿⣿⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣆⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⢻⣿⡟⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⣿⣿⣿⣿⣿⣿⣿⣿⡟⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠘⢿⣼⡟⢻⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠳⠆⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⡟⠁⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⢈⣻⣷⣾⣿⡇⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⣀⠀⠀⠀⢻⣿⣿⣿⡿⢋⡀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣿⠉⠙⢿⣿⡇⠀⠀⠀⠈⢻⣿⣷⣶⣄⣠⠀⠀⠀⣀⣠⣾⣿⣿⡯⠉⠁⠀⠀⠀⢻⣿⣿⡿⠛⢿⡆⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣟⠀⠘⢾⡿⠀⠀⠀⢀⣠⣤⣶⣿⣿⣿⠟⠀⠀⣿⣿⣿⣿⣿⣷⣦⣄⡀⠀⠀⠀⢸⣿⣯⠀⣶⡆⣿⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣿⠈⠀⣼⠃⠀⠀⠘⠋⠁⣈⣹⣿⣿⠏⠀⠀⠀⣿⣿⣏⠀⣈⣁⣈⡝⠻⠿⡆⠀⠰⣿⣏⠈⣿⢷⡟⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣿⠀⠰⡇⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⢸⣽⣿⣆⠀⠀⠀⠀⠀⠀⠁⠀⢸⣿⣿⡆⣏⣿⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⣿⠀⠀⢱⡀⠀⠀⠀⠀⠀⠀⠀⠀⣀⠀⠀⠀⠀⠀⠀⢿⣿⡄⠀⠀⠀⠀⠀⠀⠀⢸⣿⡟⣿⣿⡇⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠙⣄⠀⠀⣸⡄⠀⠀⠀⠀⠀⢀⡞⠁⣤⣤⣀⣠⣤⣀⣄⣸⣿⣦⡀⠀⠀⠀⠀⠀⢸⣿⣄⠟⣼⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⠷⠶⠻⡇⠀⠀⠀⠀⠀⠟⠀⠀⠀⠀⠉⠙⠿⠿⣿⠉⢀⡿⣷⡀⢸⣇⢰⠀⠸⣿⣡⡾⠃⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡇⠀⠀⠀⠀⠀⣀⠀⠀⠀⠀⠐⠛⠀⠀⠁⠀⠀⢰⡟⢷⢸⣿⢀⠀⠀⣿⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⡇⠀⠀⠀⠀⣼⡿⠓⠶⠒⠛⠛⠉⠙⠛⠻⠻⠿⣿⡇⠀⢸⡟⠀⠀⣠⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢘⡇⠒⠀⠀⠀⠈⠀⠀⠀⠀⠀⣶⠶⠶⠶⠶⠀⢀⣿⠁⢠⡾⠁⠀⣰⣿⠉⢇⠀⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢈⡷⠶⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠿⠃⢀⣴⡟⢹⡄⠘⣧⠀⠀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⠞⢁⡆⠀⠐⢢⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠒⠀⠀⣠⣴⣿⡟⣰⡿⣡⡄⠈⢣⡀⠀⠀⠀⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⣀⣠⡤⠖⠒⠋⠁⠀⠘⣷⠀⠀⠀⠙⠦⣄⣀⣀⣀⣀⣀⣤⣶⣿⣦⣤⣴⣶⣿⡿⢋⣼⠟⢁⣿⠁⣠⣤⡉⠀⠀⠀⠀⠀⠀
-//  ⣠⠤⠔⠒⠚⠉⠁⠀⠀⠀⠀⠀⠀⠀⢹⡆⠀⠀⠀⠀⠉⠻⣿⣿⣿⣯⣥⣤⣤⣶⣿⣿⡿⠋⣠⡿⠁⠀⠀⠁⠲⢈⣿⣿⣷⣤⣄⠀⠀⠀
-//  ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢦⡀⠤⡄⠀⠀⠀⠀⠉⡻⢿⣧⣿⣿⡟⢋⣤⡾⠋⠀⠀⠀⠀⠘⠛⢺⣿⣿⣿⣿⣿⣷⣤⣤
-//  ⡀⠀⣀⣀⣀⣀⣀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢦⣈⣳⣦⣤⣤⣿⣿⣿⠟⢋⣡⣶⣿⠋⢀⠀⠀⠀⡀⠀⠀⢀⡌⠘⣿⣿⣿⣿⣿⣿⣿
-//
+class Wrapper<T> {
+    private _dirty = true;
+    get dirty(): boolean {
+        return this._dirty;
+    }
+
+    private _value: T;
+    get value(): T { return this._value; }
+    set value(value: T) {
+        if (this._value === value) return;
+
+        this._dirty = true;
+        this._value = value;
+    }
+
+    constructor(value: T) {
+        this._value = value;
+    }
+
+    markClean(): void {
+        if (!this._dirty) return;
+        this._dirty = false;
+    }
+}
+
+interface UpdateDataType {
+    readonly id?: number | null
+    readonly normalizedHealth?: number | null
+    readonly downed?: boolean | null
+    readonly disconnected?: boolean | null
+    readonly position?: Vector | null
+    readonly colorIndex?: number | null
+    readonly name?: string | null
+    readonly hasColor?: boolean | null
+    readonly nameColor?: Color | null
+    readonly badge?: BadgeDefinition | null
+}
+
+class PlayerHealthUI {
+    readonly game: Game;
+
+    readonly container: JQuery<HTMLElement>;
+
+    readonly svgContainer: JQuery<SVGElement>;
+    readonly healthDisplay: JQuery<SVGCircleElement>;
+
+    readonly indicatorContainer: JQuery<HTMLDivElement>;
+    readonly teammateIndicator: JQuery<HTMLImageElement>;
+
+    readonly nameLabel: JQuery<HTMLSpanElement>;
+    readonly badgeImage: JQuery<HTMLImageElement>;
+
+    /*
+        hierarchy:
+
+        container
+        |
+        |-> svgContainer
+        |   |-> healthAmount
+        |
+        |-> indicatorContainer
+        |   |-> teammateIndicator
+        |
+        |-> nameLabel
+        |-> badgeImage
+    */
+
+    private readonly _id = new Wrapper<number>(-1);
+    private readonly _normalizedHealth = new Wrapper<number>(1);
+    private readonly _downed = new Wrapper<boolean | undefined>(undefined);
+    private readonly _disconnected = new Wrapper<boolean>(false);
+    private readonly _position = new Wrapper<Vector | undefined>(undefined);
+    private readonly _colorIndex = new Wrapper<number>(0);
+    private readonly _name = new Wrapper<string>(GameConstants.player.defaultName);
+    private readonly _hasColor = new Wrapper<boolean>(false);
+    private readonly _nameColor = new Wrapper<Color | undefined>(undefined);
+    private readonly _badge = new Wrapper<BadgeDefinition | undefined>(undefined);
+
+    constructor(game: Game, data?: UpdateDataType) {
+        this.game = game;
+        this.container = $<HTMLDivElement>('<div class="teammate-container"></div>');
+        this.svgContainer = $<SVGElement>('<svg class="teammate-health-indicator" width="48" height="48" xmlns="http://www.w3.org/2000/svg"></svg>');
+
+        //HACK wrapping in <svg> is necessary to ensure that it's interpreted as an actual svg circle and not… whatever it'd try to interpret it as otherwise
+        this.healthDisplay = $<SVGCircleElement>('<svg><circle r="21" cy="24" cx="24" stroke-width="6" stroke-dasharray="132" fill="none" style="transition: stroke-dashoffset ease-in-out 50ms;" /></svg>').find("circle");
+        this.indicatorContainer = $<HTMLDivElement>('<div class="teammate-indicator-container"></div>');
+        this.teammateIndicator = $<HTMLImageElement>('<img class="teammate-indicator" />');
+        this.nameLabel = $<HTMLSpanElement>('<span class="teammate-name"></span>');
+        this.badgeImage = $<HTMLImageElement>('<img class="teammate-badge" />');
+
+        this.container.append(
+            this.svgContainer.append(this.healthDisplay),
+            this.indicatorContainer.append(this.teammateIndicator),
+            this.nameLabel,
+            this.badgeImage
+        );
+
+        this.update(data);
+    }
+
+    update(data?: UpdateDataType): void {
+        if (data !== undefined) {
+            ([
+                "id",
+                "colorIndex",
+                "downed",
+                "disconnected",
+                "normalizedHealth",
+                "position",
+                "name",
+                "hasColor",
+                "nameColor",
+                "badge"
+            ] as const).forEach(<K extends keyof UpdateDataType>(prop: K) => {
+                const value = data[prop];
+                if (prop in data && value !== null) {
+                    type GoofyValueType = Exclude<Required<typeof data>[typeof prop], null>;
+
+                    (this[`_${prop}`] as Wrapper<GoofyValueType>).value = value as GoofyValueType;
+                }
+            });
+        }
+
+        if (this._id.dirty) {
+            // uh… no-op?
+        }
+
+        let recalcIndicatorFrame = false;
+
+        if (this._normalizedHealth.dirty) {
+            this.healthDisplay
+                .css("stroke", UIManager.getHealthColor(this._normalizedHealth.value, this._downed.value))
+                .css("stroke-dashoffset", 132 * (1 - this._normalizedHealth.value));
+
+            recalcIndicatorFrame = true;
+        }
+
+        if (this._downed.dirty) {
+            this.container.toggleClass("downed", this._downed.value);
+
+            recalcIndicatorFrame = true;
+        }
+
+        if (this._disconnected.dirty) {
+            this.container.toggleClass("disconnected", this._disconnected.value);
+
+            recalcIndicatorFrame = true;
+        }
+
+        let indicator: SuroiSprite | undefined;
+
+        if (this._id.value === this.game.activePlayerID) {
+            indicator = this.game.map.indicator;
+        } else {
+            const { teammateIndicators } = this.game.map;
+            const id = this._id.value;
+
+            if (this._position.dirty && this._position.value) {
+                if (!teammateIndicators.has(id)) {
+                    teammateIndicators.set(
+                        id,
+                        indicator = new SuroiSprite("player_indicator")
+                            .setVPos(toPixiCoords(this._position.value))
+                            .setTint(TEAMMATE_COLORS[this._colorIndex.value])
+                            .setScale(this.game.map.expanded ? 1 : 0.75)
+                    );
+                    this.game.map.teammateIndicatorContainer.addChild(indicator);
+                } else {
+                    (indicator = teammateIndicators.get(id)!).setVPos(this._position.value);
+                }
+            }
+
+            indicator ??= teammateIndicators.get(id)!;
+        }
+
+        if (recalcIndicatorFrame) {
+            const frame = `player_indicator${this._normalizedHealth.value === 0 ? "_dead" : this._downed.value ? "_downed" : ""}`;
+            this.teammateIndicator.attr("src", `./img/game/player/${frame}.svg`);
+            indicator?.setFrame(frame);
+        }
+
+        if (this._colorIndex.dirty) {
+            this.indicatorContainer.css(
+                "background-color",
+                TEAMMATE_COLORS[this._colorIndex.value]?.toHex() ?? ""
+            );
+        }
+
+        if (this._name.dirty) {
+            this.nameLabel.text(this._name.value);
+        }
+
+        if (
+            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing --- ????????
+            (this._hasColor.dirty && this._nameColor.value) ||
+            (this._nameColor.dirty && this._hasColor.value)
+        ) {
+            this.nameLabel.css(
+                "color",
+                this._hasColor && this._nameColor.value ? this._nameColor.value.toHex() : ""
+            );
+        }
+
+        if (this._badge.dirty) {
+            if (this._badge.value) {
+                this.badgeImage
+                    .attr(
+                        "src",
+                        `./img/game/badges/${this._badge.value.idString}.svg`
+                    )
+                    .css({ display: "", visibility: "" });
+            } else {
+                this.badgeImage
+                    .attr("src", "")
+                    .css({ display: "none", visibility: "none" });
+            }
+        }
+    }
+
+    destroy(): void {
+        this.container.remove();
+        const id = this._id.value;
+        const teammateIndicators = this.game.map.teammateIndicators;
+        teammateIndicators.get(id)?.destroy();
+        teammateIndicators.delete(id);
+    }
+}
