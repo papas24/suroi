@@ -595,7 +595,7 @@ export class Player extends GameObject<ObjectCategory.Player> {
                         frame = `bush_residue`;
                         break;
                     default:
-                        frame = `Loots.fromString<SkinDefinition>(skinID).obstacleSprite}_residue`;
+                        frame = `${Loots.fromString<SkinDefinition>(skinID).obstacleSprite}_residue`;
                 }
 
                 disguiseResidue.setFrame(frame);
