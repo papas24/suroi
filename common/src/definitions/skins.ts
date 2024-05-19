@@ -87,6 +87,10 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("disguise", ["stove", "metal", true], ["One With Cooking"]),
         simple("disguise", ["dead_tree_big", "tree"], ["Spooky Barkskin"]),
         simple("disguise", ["airdrop_crate", "crate"], ["Hot Drop"]),
+        simple("disguise", ["bush", "bush"], ["Bush Wookie"]),
+        simple("disguise", ["blueberry_bush", "bush"], ["Blueberry Bush Wookie"]),
+        simple("disguise", ["pumpkin", "pumpkin"], ["Pumpkin Head"]),
+        simple("disguise", ["tear_gas_crate", "crate", true], ["Tear Gas-r"]),
         simple("disguise", ["super_barrel", "metal", true], ["Goldfish in a Barrel"]),
 
         ...[
