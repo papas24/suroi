@@ -555,15 +555,8 @@ export class Player extends GameObject<ObjectCategory.Player> {
             if (this.isActivePlayer) {
 
                 // -------------------------------------------------------------------------------------------
-                // Halloween Disguises: Play additional obstacle destroy sound.
+                // Halloween Disguises
                 // -------------------------------------------------------------------------------------------
-                if (this.dead && Loots.fromString<SkinDefinition>(skinID).isDisguise) {
-                    this.playSound(`${Loots.fromString<SkinDefinition>(skinID).material}_destroyed`, {
-                        falloff: 0.2,
-                        maxRange: 96
-                    });
-                }
-
                 this.isWearingDisguise = Loots.fromString<SkinDefinition>(skinID).isDisguise;
                 this.disguiseMaterial = Loots.fromString<SkinDefinition>(skinID).material;
                 // -------------------------------------------------------------------------------------------
@@ -600,6 +593,22 @@ export class Player extends GameObject<ObjectCategory.Player> {
 
                 disguiseResidue.setFrame(frame);
                 // ---------------------------------------------------------------------------------------------------------
+
+                // Play the disguise's material destroyed sound upon death.
+                if (this.dead && Loots.fromString<SkinDefinition>(skinID).isDisguise) {
+                    this.playSound(`${Loots.fromString<SkinDefinition>(skinID).material}_destroyed`, {
+                        falloff: 0.2,
+                        maxRange: 96
+                    });
+
+                    // Special Case: Tear Gas smoke sound.
+                    if (Loots.fromString<SkinDefinition>(skinID).idString === "tear_gas-r") {
+                        this.playSound(`smoke_grenade`, {
+                            falloff: 0.2,
+                            maxRange: 96
+                        });
+                    }
+                }
             }
 
             // In case it's a disguise, use a default skin so we have texture.
@@ -1446,40 +1455,29 @@ export class Player extends GameObject<ObjectCategory.Player> {
     }
 
     hitEffect(position: Vector, angle: number, sound?: string): void {
+        this.game.soundManager.play(
+            sound ?? (randomBoolean() ? "player_hit_1" : "player_hit_2"), {
+            position,
+            falloff: 0.2,
+            maxRange: 96
+        });
 
-        if (!this.isWearingDisguise) {
-            this.game.soundManager.play(
-                sound ?? (randomBoolean() ? "player_hit_1" : "player_hit_2"), {
-                position,
-                falloff: 0.2,
-                maxRange: 96
-            });
-
-            // Regular particles
-            this.game.particleManager.spawnParticle({
-                frames: "blood_particle",
-                zIndex: ZIndexes.Players + 1,
-                position,
-                lifetime: 1000,
-                scale: {
-                    start: 0.5,
-                    end: 1
-                },
-                alpha: {
-                    start: 1,
-                    end: 0
-                },
-                speed: Vec.fromPolar(angle, randomFloat(0.5, 1))
-            });
-        }
-        else {
-            // Play additional obstacle hit sound if the player is wearing a disguise.
-            this.game.soundManager.play(`${this.disguiseMaterial}_hit_${randomBoolean() ? "1" : "2"}`, {
-                position,
-                falloff: 0.2,
-                maxRange: 96
-            });
-        }
+        // Regular particles
+        this.game.particleManager.spawnParticle({
+            frames: "blood_particle",
+            zIndex: ZIndexes.Players + 1,
+            position,
+            lifetime: 1000,
+            scale: {
+                start: 0.5,
+                end: 1
+            },
+            alpha: {
+                start: 1,
+                end: 0
+            },
+            speed: Vec.fromPolar(angle, randomFloat(0.5, 1))
+        });
     }
 
     destroy(): void {
