@@ -573,7 +573,7 @@ export class Player extends GameObject<ObjectCategory.Player> {
                 // ---------------------------------------------------------------------------------------------------------
 
                 // Play the disguise's material destroyed sound upon death.
-                if (this.dead && Loots.fromString<SkinDefinition>(skinID).isDisguise) {
+                if (this.dead && this.isActivePlayer && Loots.fromString<SkinDefinition>(skinID).isDisguise) {
                     this.playSound(`${Loots.fromString<SkinDefinition>(skinID).material}_destroyed`, {
                         falloff: 0.2,
                         maxRange: 96
