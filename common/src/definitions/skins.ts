@@ -47,8 +47,9 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             extends: "skin_factory",
             applier: (obstacle: string, material: string, explodes = false) => ({
                 explodes: explodes,
-                obstacle: obstacle,
-                obstacleSprite: obstacle === "rock" ? `${obstacle}_1` : obstacle,
+                // In case of an obstacle with variations, replace the sliced part with nothing 
+                obstacle: ["rock", "oak_tree", "box"].includes(obstacle.replace(obstacle.slice(obstacle.length - 2), "")) ? obstacle.replace(obstacle.slice(obstacle.length - 2), "") : obstacle,
+                obstacleSprite: obstacle,
                 material: material,
                 isDisguise: true,
                 hideFromLoadout: true,
@@ -79,7 +80,7 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("disguise", ["barrel", "metal", true], ["Fish in a Barrel"]),
         simple("disguise", ["fridge", "appliance"], ["Indistructible"]),
         simple("disguise", ["pine_tree", "tree"], ["The Lorax"]),
-        simple("disguise", ["rock", "stone"], ["Rock Solid"]),
+        simple("disguise", ["rock_1", "stone"], ["Rock Solid 1"]),
         simple("disguise", ["gold_rock", "stone"], ["Gold Solid"]),
         simple("disguise", ["toilet", "porcelain"], ["Smelly"]),
         simple("disguise", ["washing_machine", "appliance"], ["C-Cleaner"]),
@@ -92,6 +93,15 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("disguise", ["pumpkin", "pumpkin"], ["Pumpkin Head"]),
         simple("disguise", ["tear_gas_crate", "crate", true], ["Tear Gas-r"]),
         simple("disguise", ["super_barrel", "metal", true], ["Goldfish in a Barrel"]),
+        simple("disguise", ["table", "wood"], ["Simple Wood"]),
+        simple("disguise", ["rock_6", "stone"], ["Mossy"]),
+        simple("disguise", ["rock_7", "stone"], ["Cracked at Suroi"]),
+        simple("disguise", ["oak_tree_3", "tree"], ["Red Leaf"]),
+        simple("disguise", ["oak_tree_2", "tree"], ["Orange Leaf"]),
+        simple("disguise", ["ammo_crate", "cardboard"], ["Guy in Ammunition"]),
+       // simple("disguise", ["box_1", "cardboard"], ["Guy In Size 0"]),
+       // simple("disguise", ["box_2", "cardboard"], ["Guy In Size 2"]),
+       // simple("disguise", ["box_3", "cardboard"], ["Guy In Size 4"]),
 
         ...[
             "HAZEL Jumpsuit",
