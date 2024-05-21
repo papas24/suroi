@@ -48,7 +48,7 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
             applier: (obstacle: string, material: string, explodes = false) => ({
                 explodes: explodes,
                 // In case of an obstacle with variations, replace the sliced part with nothing 
-                obstacle: ["rock", "oak_tree", "box"].includes(obstacle.replace(obstacle.slice(obstacle.length - 2), "")) ? obstacle.replace(obstacle.slice(obstacle.length - 2), "") : obstacle,
+                obstacle: obstacle,
                 obstacleSprite: obstacle,
                 material: material,
                 isDisguise: true,
@@ -80,7 +80,7 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("disguise", ["barrel", "metal", true], ["Fish in a Barrel"]),
         simple("disguise", ["fridge", "appliance"], ["Indistructible"]),
         simple("disguise", ["pine_tree", "tree"], ["The Lorax"]),
-        simple("disguise", ["rock_1", "stone"], ["Rock Solid 1"]),
+        simple("disguise", ["rock", "stone"], ["Rock Solid"]),
         simple("disguise", ["gold_rock", "stone"], ["Gold Solid"]),
         simple("disguise", ["toilet", "porcelain"], ["Smelly"]),
         simple("disguise", ["washing_machine", "appliance"], ["C-Cleaner"]),
