@@ -186,8 +186,8 @@ const maps = {
         ]
     },
     halloween: {
-        width: 1666,
-        height: 1666,
+        width: 1632,
+        height: 1632,
         oceanSize: 128,
         beachSize: 32,
         rivers: {
