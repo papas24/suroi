@@ -564,7 +564,6 @@ export const LootTiers: Record<string, WeightedItem[]> = {
         { item: "orange_boxman", weight: 0.25 },
         { item: "boombox", weight: 0.6 },
         { item: "gold_solid", weight: 0.09 },
-        { item: "flint_stones", weight: 0.08 },
         { item: "the_lorax", weight: 0.7 },
         { item: "rock_solid", weight: 0.7 },
         { item: "smelly", weight: 0.67 },
