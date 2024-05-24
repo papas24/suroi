@@ -328,7 +328,6 @@ export const Obstacles = ObjectDefinitions.create<ObstacleDefinition>()(
             hitbox: new CircleHitbox(5.5),
             spawnHitbox: new CircleHitbox(15),
             rotationMode: RotationMode.Full,
-            variations: 3,
             zIndex: ZIndexes.ObstaclesLayer4,
             allowFlyover: FlyoverPref.Never
         },
