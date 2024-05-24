@@ -97,7 +97,6 @@ export const Skins = ObjectDefinitions.create<SkinDefinition>()(
         simple("disguise", ["rock_7", "stone"], ["Cracked at Suroi"]),
         simple("disguise", ["oak_tree_3", "tree"], ["Red Leaf"]),
         simple("disguise", ["oak_tree_2", "tree"], ["Orange Leaf"]),
-        simple("disguise", ["ammo_crate", "cardboard"], ["Guy in Ammunition"]),
        // simple("disguise", ["box_1", "cardboard"], ["Guy In Size 0"]),
        // simple("disguise", ["box_2", "cardboard"], ["Guy In Size 2"]),
        // simple("disguise", ["box_3", "cardboard"], ["Guy In Size 4"]),
