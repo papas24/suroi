@@ -12,6 +12,9 @@ import { type Map } from "../map";
 import { Player, type PlayerContainer } from "../objects/player";
 import { type LootTables } from "./lootTables";
 
+// added
+import { SkinDefinition } from "../../../common/src/definitions/skins";
+
 export interface MapDefinition {
     readonly width: number
     readonly height: number
@@ -239,6 +242,7 @@ const maps = {
             grenade_crate: 35,
             stove: 70,
             fridge: 60,
+            table: 50,
             toilet: 55,
             washing_machine: 50,
             dead_tree: 125
@@ -254,6 +258,97 @@ const maps = {
             { name: "Mt. Fang", position: Vec.create(0.5, 0.35) },
             { name: "Darkwood", position: Vec.create(0.5, 0.65) }
         ]
+    },
+    halloween_test: {
+        width: 512,
+        height: 512,
+        beachSize: 16,
+        oceanSize: 40,
+        genCallback: (map) => {
+            // Function to generate all game loot items
+            const genLoots = (pos: Vector, yOff: number, xOff: number): void => {
+                const width = 70;
+
+                const startPos = Vec.clone(pos);
+                startPos.x -= width / 2;
+                const itemPos = Vec.clone(startPos);
+
+                const countMap = {
+                    [ItemType.Skin]: 1
+                };
+
+                for (const item of Loots.definitions) {
+                    if (item.itemType !== ItemType.Skin || !Loots.fromString<SkinDefinition>(item.idString).isDisguise) continue;
+
+                    map.game.addLoot(item, itemPos, countMap[item.itemType] ?? 1).velocity = Vec.create(0, 0);
+
+                    itemPos.x += xOff;
+                    if (
+                        (xOff > 0 && itemPos.x > startPos.x + width) ||
+                        (xOff < 0 && itemPos.x < startPos.x - width)
+                    ) {
+                        itemPos.x = startPos.x;
+                        itemPos.y -= yOff;
+                    }
+                }
+            };
+
+            // Fixed obstacles
+            const obstacles = [
+                { id: "rock", pos: Vec.create(10, 10) },
+                { id: "rock", pos: Vec.create(25, 40) },
+                { id: "rock", pos: Vec.create(25, 80) },
+                { id: "regular_crate", pos: Vec.create(20, 15) },
+                { id: "barrel", pos: Vec.create(25, 25) },
+                { id: "rock", pos: Vec.create(80, 10) },
+                { id: "rock", pos: Vec.create(60, 15) },
+                { id: "oak_tree", pos: Vec.create(20, 70) },
+                { id: "oil_tank", pos: Vec.create(120, 25) },
+                { id: "birch_tree", pos: Vec.create(120, 50) }
+            ];
+
+            const center = Vec.create(map.width / 2, map.height / 2);
+
+            for (const obstacle of obstacles) {
+                map.generateObstacle(obstacle.id, Vec.add(center, obstacle.pos), 0, 1, 1);
+                map.generateObstacle(obstacle.id, Vec.add(center, Vec.create(obstacle.pos.x * -1, obstacle.pos.y)), 0, 1);
+                map.generateObstacle(obstacle.id, Vec.add(center, Vec.create(obstacle.pos.x, obstacle.pos.y * -1)), 0, 1);
+                map.generateObstacle(obstacle.id, Vec.add(center, Vec.create(obstacle.pos.x * -1, obstacle.pos.y * -1)), 0, 1);
+            }
+
+            genLoots(Vec.add(center, Vec.create(-70, 80)), 8, 8);
+            genLoots(Vec.add(center, Vec.create(70, 80)), 8, 8);
+            genLoots(Vec.add(center, Vec.create(-70, -80)), -8, 8);
+            genLoots(Vec.add(center, Vec.create(70, -80)), -8, 8);
+
+            // Generate random obstacles around the center
+            const randomObstacles: MapDefinition["obstacles"] = {
+                oak_tree: 50,
+                rock: 50,
+                bush: 20,
+                birch_tree: 5,
+                barrel: 15,
+                super_barrel: 2
+            };
+
+            for (const obstacle in randomObstacles) {
+                const limit = randomObstacles[obstacle];
+                for (let i = 0; i < limit; i++) {
+                    const definition = Obstacles.fromString(obstacle);
+                    const pos = map.getRandomPosition(
+                        definition.spawnHitbox ?? definition.hitbox,
+                        {
+                            collides: pos => Collision.circleCollision(center, 130, pos, 1)
+                        }
+                    );
+
+                    if (!pos) continue;
+
+                    map.generateObstacle(definition, pos, 0, 1);
+                }
+            }
+        },
+        places: []
     },
     // Arena map to test guns with really bad custom generation code lol
     arena: {
